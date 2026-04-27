@@ -63,8 +63,9 @@ Use the smallest task list that preserves quality:
 
 - no task list for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps
 - use a task list for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression
-- default to 3-6 tasks for ordinary non-trivial work
-- use 7-10+ tasks only when work naturally spans multiple features/files/owners, real dependencies, or parallel branches
+- size the task list to the actual work; there is no maximum task count
+- use as many tasks as needed for clarity, dependencies, and checkpoints, including 20+ tasks for long or complex processes
+- avoid compressing genuinely distinct work into an artificial 6-8 task range
 - use dependencies only when they change what can start next
 - start with the smallest useful task list and expand it as exploration reveals real subwork
 
