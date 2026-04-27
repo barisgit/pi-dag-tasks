@@ -1,19 +1,20 @@
 # pi-dag-tasks
 
-Lean DAG task/todo manager for the Pi coding agent.
+Lean unified task manager for the Pi coding agent. In Pi, tasks are the todo/progress list.
 
-Design goal: keep the LLM tool surface small while preserving dependency-aware task tracking.
+Design goal: keep the LLM tool surface small while preserving dependency-aware task tracking, verification nudges, and durable progress across compression.
 
 ## Tools
 
 Only two LLM-callable tools are exposed:
 
-- `task_manage` — batch CRUD/status/dependency/archive/history operations
+- `task_manage` — Pi's single task/todo tracker for batch CRUD/status/dependency/archive/history operations
   - actions: `create`, `update`, `complete`, `archive`, `purge`, `list`, `history`
   - use `action: "create"` for both single `create` and batch `creates`; there is no `action: "creates"`
   - supports batch fields: `creates`, `updates`, `ids`
   - dependency fields: `blockedBy`, `blocks`, `addBlockedBy`, `addBlocks`, `removeBlockedBy`, `removeBlocks`; values must be task IDs like `"1"`, not task titles
   - `context` field preserves durable handoff instructions and outcomes across compression; add context to pending tasks up front, then update it as decisions/outcomes emerge
+  - for tests, builds, lint, typecheck, manual review, or output inspection tasks, prefer `metadata.kind: "verification"`
   - create accepts initial `status`, so one call can create multiple tasks with one or more already `in_progress`
 - `task_next` — compact summary plus ready/unblocked tasks, including context for active/ready tasks
 
@@ -56,6 +57,17 @@ History is compact by default. Add `"includeContext": true` when you want archiv
 
 Use `purge` only for true destructive removal from the active DAG. Completed work should usually be archived, not purged.
 
+## Task sizing
+
+Use the smallest task list that preserves quality:
+
+- no task list for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps
+- use a task list for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression
+- default to 3-6 tasks for ordinary non-trivial work
+- use 7-10+ tasks only when work naturally spans multiple features/files/owners, real dependencies, or parallel branches
+- use dependencies only when they change what can start next
+- start with the smallest useful task list and expand it as exploration reveals real subwork
+
 ## UI
 
 Inspired by `tintinweb/pi-tasks`, but smaller:
@@ -85,6 +97,8 @@ Context is intentionally rendered selectively:
 ## Reminder behavior
 
 The extension injects a compact ephemeral `<task-reminder>` into the latest visible context message before each LLM call when active tasks exist. It leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It is not persisted as a session message and does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+
+When all tasks are complete, the reminder nudges verification before finalization and archival. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 
 ## Storage
 

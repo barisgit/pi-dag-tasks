@@ -10,6 +10,20 @@ import { DagTaskWidget } from "./ui/widget.js";
 
 const TOOL_NAMES = new Set(["task_manage", "task_next"]);
 const AUTO_CLEAR_DELAY_TURNS = 4;
+const VERIFICATION_TERMS = [
+  "test", "tests", "tested", "testing",
+  "verify", "verified", "verification",
+  "check", "checked", "sanity check",
+  "review", "reviewed",
+  "lint", "linted",
+  "typecheck", "type check", "tsc",
+  "build", "built",
+  "compile", "compiled",
+  "validate", "validated",
+  "smoke test",
+  "manual test",
+  "qa",
+];
 
 function textResult(text: string, details?: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], details };
@@ -88,6 +102,32 @@ function truncateText(text: string, max = 600): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+function normalizeVerificationText(text: string): string {
+  return text.toLowerCase().replace(/[_-]+/g, " ");
+}
+
+function taskSearchText(task: DagTask): string {
+  return [
+    task.title,
+    task.description,
+    task.context,
+    task.activeForm,
+    JSON.stringify(task.metadata ?? {}),
+  ].filter(Boolean).join("\n");
+}
+
+function hasVerificationSignal(task: DagTask): boolean {
+  if (task.metadata?.kind === "verification") return true;
+  const text = normalizeVerificationText(taskSearchText(task));
+  return VERIFICATION_TERMS.some((term) => text.includes(term));
+}
+
+function shouldNudgeVerification(tasks: DagTask[]): boolean {
+  if (tasks.length < 3) return false;
+  if (!tasks.every((task) => task.status === "completed")) return false;
+  return !tasks.some(hasVerificationSignal);
+}
+
 function summarizeTasks(store: DagTaskStore, tasks = store.list(), includeCompleted = true, includeContext = false): string {
   const visible = includeCompleted ? tasks : tasks.filter((task) => task.status !== "completed");
   if (visible.length === 0) return "No tasks";
@@ -124,7 +164,11 @@ function buildReminder(store: DagTaskStore): string | undefined {
   const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0).length;
   const completed = tasks.filter((task) => task.status === "completed").length;
   const open = tasks.length - completed;
-  if (open === 0) return `All tasks completed. If the user has seen the result, archive completed tasks now to clear the task widget; keep them only when they are still needed for review.`;
+  if (open === 0) {
+    const parts = ["All tasks are completed. Before finalizing, verify if appropriate or state why verification was not run. Archive completed tasks after the user has seen the result or when they are no longer useful for review."];
+    if (shouldNudgeVerification(tasks)) parts.push("All tasks are completed, but no verification task is recorded. Before finalizing, verify the work if practical, or state why verification was not run.");
+    return parts.join("\n");
+  }
   const parts = [
     `Task state: ${open} open, ${active.length} active, ${ready.length} ready, ${blocked} blocked${completed ? `, ${completed} completed` : ""}.`,
   ];
@@ -243,15 +287,20 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "task_manage",
     label: "Task Manage",
-    description: "Manage DAG tasks. Use action:'create' for single or batch creation via create/creates; dependencies use task IDs like '1', not titles. Use context for durable intent and status:'in_progress' when starting immediately.",
-    promptSnippet: "Batch CRUD for DAG tasks",
+    description: "Manage Pi's task list: the durable todo/progress tracker for multi-step work. Use action:'create' for single or batch creation via create/creates; dependencies use task IDs like '1', not titles. Use context for durable intent and status:'in_progress' when starting immediately.",
+    promptSnippet: "Manage task list",
     promptGuidelines: [
-      "Use proactively for multi-step workflows, especially work with 3+ distinct steps, dependencies, parallel branches, verification phases, or durable intent across turns/compression.",
+      "This is Pi's single task/todo tracker. Use task_manage instead of writing separate informal todo lists in prose when tracking is appropriate.",
+      "Use proactively for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression.",
+      "Skip task_manage for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps.",
+      "Default to 3-6 tasks for ordinary non-trivial work; use 7-10+ tasks only when the request naturally spans multiple features/files/owners, real dependencies, or parallel branches.",
+      "Start with the smallest useful task list and expand it when exploration reveals real subwork, dependencies, or blockers.",
       "Use action:'create' for both create and creates; there is no action:'creates'.",
       "Dependency fields blockedBy/blocks/addBlockedBy/addBlocks must contain task IDs like '1', not task titles; create first, then update dependencies if you need generated IDs.",
-      "For broad research/implementation/review workflows, prefer a useful 4-12 step task map over 2-3 vague tasks; keep tasks outcome-oriented, not microscopic.",
-      "When a workflow has dependencies, split it into a clear map with blockedBy/blocks; run independent ready tasks in parallel where safe.",
+      "Use dependencies only when they change what can start next; blocked work is represented with blockedBy/blocks dependencies, not a separate blocked status.",
+      "Normally keep one task in_progress per active worker. Multiple in_progress tasks are valid only for genuine parallel work or distinct owners/subagents.",
       "When creating a task map, add context to pending tasks up front: constraints, relevant findings, expected inputs, dependencies, and definition of done; update context as decisions/outcomes emerge.",
+      "Keep tasks outcome-oriented and verifiable, not microscopic. For tests, builds, lint, typecheck, manual review, or output inspection tasks, set metadata.kind = 'verification'.",
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
       "Use task_next for ready/unblocked work; don't start blocked tasks.",
     ],
@@ -324,9 +373,9 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "task_next",
     label: "Task Next",
-    description: "Return ready/unblocked tasks and a compact summary.",
-    promptSnippet: "Ready DAG tasks",
-    promptGuidelines: ["Use after completing work; don't start blocked tasks."],
+    description: "Return ready/unblocked tasks from Pi's task list and a compact summary.",
+    promptSnippet: "Next ready tasks",
+    promptGuidelines: ["Use after completing work or when resuming; don't start blocked tasks."],
     parameters: TaskNextParams,
     async execute(_toolCallId, params: { limit?: number; includeBlocked?: boolean; includeCompleted?: boolean }, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
