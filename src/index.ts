@@ -197,6 +197,10 @@ function appendReminderToMessage(message: any, reminder: string): boolean {
   return true;
 }
 
+function isUserSideReminderAnchor(message: any): boolean {
+  return message?.role === "user" || message?.role === "toolResult" || message?.role === "bashExecution";
+}
+
 function cloneMessage(message: any): any {
   const clone = { ...message };
   if (Array.isArray(clone.content)) {
@@ -205,16 +209,15 @@ function cloneMessage(message: any): any {
   return clone;
 }
 
-function injectReminder(messages: any[], reminder: string): any[] {
+export function injectReminder(messages: any[], reminder: string): any[] {
   const clonedMessages = messages.map(cloneMessage);
 
   for (let index = clonedMessages.length - 1; index >= 0; index--) {
     const message = clonedMessages[index];
-    if (message?.role !== "user" && message?.role !== "assistant") continue;
+    if (!isUserSideReminderAnchor(message)) continue;
     if (appendReminderToMessage(message, reminder)) return clonedMessages;
   }
 
-  clonedMessages.push({ role: "user", content: `<task-reminder>\n${reminder}\n</task-reminder>`, timestamp: Date.now() });
   return clonedMessages;
 }
 

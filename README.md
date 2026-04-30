@@ -97,7 +97,7 @@ Context is intentionally rendered selectively:
 
 ## Reminder behavior
 
-The extension injects a compact ephemeral `<task-reminder>` into the latest visible context message before each LLM call when active tasks exist. It leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It is not persisted as a session message and does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+The extension injects a compact ephemeral `<task-reminder>` into the latest user-side context message before each LLM call when active tasks exist. User-side anchors include normal user messages and tool-result messages, so reminders remain available after tool use without being rendered as assistant-authored text. It leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It is not persisted as a session message and does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
 
 When all tasks are complete, the reminder nudges verification before finalization and archival. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 
