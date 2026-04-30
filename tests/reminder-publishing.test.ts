@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   REMINDER_REMOVE_EVENT,
   REMINDER_UPSERT_EVENT,
@@ -8,6 +11,28 @@ import dagTasksExtension from "../src/index.ts";
 interface EmittedEvent {
   name: string;
   payload: any;
+}
+
+async function withDebugLog<T>(fn: (path: string) => Promise<T> | T): Promise<T> {
+  const previous = process.env.PI_DAG_TASKS_DEBUG_LOG;
+  const dir = mkdtempSync(join(tmpdir(), "pi-dag-tasks-debug-"));
+  const path = join(dir, "dag-tasks.jsonl");
+  process.env.PI_DAG_TASKS_DEBUG_LOG = path;
+  try {
+    return await fn(path);
+  } finally {
+    if (previous === undefined) delete process.env.PI_DAG_TASKS_DEBUG_LOG;
+    else process.env.PI_DAG_TASKS_DEBUG_LOG = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function readDebugRecords(path: string): any[] {
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 function createMockPi() {
@@ -158,6 +183,35 @@ describe("task reminder publishing", () => {
 
       handlers.get("context")?.({ messages: [] }, ctx);
       expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(1);
+    });
+  });
+
+  test("writes cache-relevant reminder decision debug records", async () => {
+    await withMemoryTasks(async () => {
+      await withDebugLog(async (debugLogPath) => {
+        const { handlers, tools } = createMockPi();
+        const ctx = createContext();
+        await createTask(tools, ctx);
+
+        handlers.get("context")?.({ messages: [] }, ctx);
+        handlers.get("tool_result")?.({ toolName: "task_manage" });
+        handlers.get("context")?.({ messages: [] }, ctx);
+
+        const records = readDebugRecords(debugLogPath);
+        expect(records.map((record) => record.action)).toEqual([
+          "upsert",
+          "remove-tool-result",
+          "suppress-next-context",
+        ]);
+        expect(records[0]).toMatchObject({
+          event: "task_reminder_decision",
+          taskCounts: { total: 1, open: 1, active: 1, ready: 0, blocked: 0, completed: 0 },
+        });
+        expect(records[0].textChars).toBeGreaterThan(0);
+        expect(records[0].textHash).toMatch(/^[a-f0-9]{16}$/);
+        expect(records[0].textPreview).toContain("Task state:");
+        expect(JSON.stringify(records)).not.toContain("<task-reminder>");
+      });
     });
   });
 });

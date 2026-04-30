@@ -1,4 +1,7 @@
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -17,6 +20,8 @@ const TOOL_NAMES = new Set(["task_manage", "task_next"]);
 const TASK_REMINDER_SOURCE = "pi-dag-tasks";
 const TASK_REMINDER_ID = "state";
 const TASK_REMINDER_PRIORITY = 20;
+const DEBUG_LOG_PATH = join(homedir(), ".pi", "log", "dag-tasks.jsonl");
+const DEBUG_TEXT_PREVIEW_CHARS = 160;
 const AUTO_CLEAR_DELAY_TURNS = 4;
 const VERIFICATION_TERMS = [
   "test", "tests", "tested", "testing",
@@ -189,6 +194,61 @@ function buildReminder(store: DagTaskStore): string | undefined {
   return parts.join("\n");
 }
 
+function taskCounts(store: DagTaskStore): Record<string, number> {
+  const tasks = store.list();
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const active = tasks.filter((task) => task.status === "in_progress").length;
+  const ready = store.ready().length;
+  const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0).length;
+  return {
+    total: tasks.length,
+    open: tasks.length - completed,
+    active,
+    ready,
+    blocked,
+    completed,
+  };
+}
+
+function textHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+function textPreview(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > DEBUG_TEXT_PREVIEW_CHARS
+    ? `${collapsed.slice(0, DEBUG_TEXT_PREVIEW_CHARS - 1)}…`
+    : collapsed;
+}
+
+function logReminderDecision(
+  action: string,
+  store: DagTaskStore,
+  text?: string,
+  extra: Record<string, unknown> = {},
+): void {
+  try {
+    const record: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      event: "task_reminder_decision",
+      action,
+      taskCounts: taskCounts(store),
+      ...extra,
+    };
+    if (text !== undefined) {
+      record.textChars = text.length;
+      record.textHash = textHash(text);
+      record.textPreview = textPreview(text);
+    }
+
+    const path = process.env.PI_DAG_TASKS_DEBUG_LOG || DEBUG_LOG_PATH;
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+  } catch {
+    // Debug logging is best-effort and must not affect task handling.
+  }
+}
+
 function taskReminderIntent(text: string): ReminderIntent {
   return {
     source: TASK_REMINDER_SOURCE,
@@ -266,14 +326,17 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     refreshUi(ctx);
     if (suppressNextReminder) {
       suppressNextReminder = false;
+      logReminderDecision("suppress-next-context", store);
       return undefined;
     }
     const reminder = buildReminder(store);
     if (!reminder) {
       pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      logReminderDecision("remove-empty", store);
       return undefined;
     }
     pi.events.emit(REMINDER_UPSERT_EVENT, taskReminderIntent(reminder));
+    logReminderDecision("upsert", store, reminder);
     return undefined;
   });
 
@@ -288,6 +351,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     if (TOOL_NAMES.has(event.toolName)) {
       suppressNextReminder = true;
       pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      logReminderDecision("remove-tool-result", store, undefined, { toolName: event.toolName });
     }
     return {};
   });
