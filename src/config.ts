@@ -2,17 +2,20 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DagTasksConfig } from "./types.js";
 
-export const CONFIG_PATH = join(process.cwd(), ".pi", "dag-tasks", "dag-tasks-config.json");
+export function configPath(cwd: string): string {
+  return join(cwd, ".pi", "dag-tasks", "dag-tasks-config.json");
+}
 
-export function loadConfig(): DagTasksConfig {
+export function loadConfig(cwd: string): DagTasksConfig {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as DagTasksConfig;
+    return JSON.parse(readFileSync(configPath(cwd), "utf8")) as DagTasksConfig;
   } catch {
     return {};
   }
 }
 
-export function saveConfig(config: DagTasksConfig): void {
-  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+export function saveConfig(config: DagTasksConfig, cwd: string): void {
+  const filePath = configPath(cwd);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(config, null, 2));
 }

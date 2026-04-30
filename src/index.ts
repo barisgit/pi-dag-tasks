@@ -2,13 +2,21 @@ import { join, resolve } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import {
+  REMINDER_REMOVE_EVENT,
+  REMINDER_UPSERT_EVENT,
+} from "pi-reminders/src/types.js";
+import type { ReminderIntent, ReminderRemoveRequest } from "pi-reminders/src/types.js";
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { DagTaskStore, type TaskPatch } from "./store.js";
-import type { DagTask, TaskStatus } from "./types.js";
+import type { DagTask, DagTasksConfig, TaskStatus } from "./types.js";
 import { DagTaskWidget } from "./ui/widget.js";
 
 const TOOL_NAMES = new Set(["task_manage", "task_next"]);
+const TASK_REMINDER_SOURCE = "pi-dag-tasks";
+const TASK_REMINDER_ID = "state";
+const TASK_REMINDER_PRIORITY = 20;
 const AUTO_CLEAR_DELAY_TURNS = 4;
 const VERIFICATION_TERMS = [
   "test", "tests", "tested", "testing",
@@ -181,48 +189,26 @@ function buildReminder(store: DagTaskStore): string | undefined {
   return parts.join("\n");
 }
 
-function appendReminderToMessage(message: any, reminder: string): boolean {
-  if (!message) return false;
-  const taskReminder = `\n\n<task-reminder>\n${reminder}\n</task-reminder>`;
-
-  if (typeof message.content === "string") {
-    message.content = `${message.content}${taskReminder}`;
-    return true;
-  }
-
-  if (!Array.isArray(message.content)) return false;
-
-  const reminderBlock = { type: "text", text: taskReminder };
-  message.content = [...message.content, reminderBlock];
-  return true;
+function taskReminderIntent(text: string): ReminderIntent {
+  return {
+    source: TASK_REMINDER_SOURCE,
+    id: TASK_REMINDER_ID,
+    label: "Tasks",
+    priority: TASK_REMINDER_PRIORITY,
+    ttl: "persistent",
+    text,
+  };
 }
 
-function isUserSideReminderAnchor(message: any): boolean {
-  return message?.role === "user" || message?.role === "toolResult" || message?.role === "bashExecution";
-}
-
-function cloneMessage(message: any): any {
-  const clone = { ...message };
-  if (Array.isArray(clone.content)) {
-    clone.content = clone.content.map((part: any) => (part && typeof part === "object" ? { ...part } : part));
-  }
-  return clone;
-}
-
-export function injectReminder(messages: any[], reminder: string): any[] {
-  const clonedMessages = messages.map(cloneMessage);
-
-  for (let index = clonedMessages.length - 1; index >= 0; index--) {
-    const message = clonedMessages[index];
-    if (!isUserSideReminderAnchor(message)) continue;
-    if (appendReminderToMessage(message, reminder)) return clonedMessages;
-  }
-
-  return clonedMessages;
+function taskReminderRemoveRequest(): ReminderRemoveRequest {
+  return {
+    source: TASK_REMINDER_SOURCE,
+    id: TASK_REMINDER_ID,
+  };
 }
 
 export default function dagTasksExtension(pi: ExtensionAPI): void {
-  const cfg = loadConfig();
+  const cfg: DagTasksConfig = {};
   let store = new DagTaskStore();
   const widget = new DagTaskWidget(store);
   const autoArchive = new AutoArchiveManager(() => store, () => cfg.autoArchiveCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY_TURNS);
@@ -230,21 +216,33 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   let storeReady = false;
   let suppressNextReminder = false;
 
+  function resolveCwd(ctx?: ExtensionContext): string {
+    return ctx?.cwd ?? process.env.PWD ?? process.cwd();
+  }
+
+  function refreshConfig(cwd: string): void {
+    delete cfg.taskScope;
+    delete cfg.autoArchiveCompleted;
+    Object.assign(cfg, loadConfig(cwd));
+  }
+
   function resolveStorePath(ctx?: ExtensionContext): string | undefined {
+    const cwd = resolveCwd(ctx);
     const env = process.env.PI_DAG_TASKS;
     if (env === "off") return undefined;
     if (env?.startsWith("/")) return env;
-    if (env?.startsWith(".")) return resolve(process.cwd(), env);
-    if (env) return join(process.env.HOME ?? process.cwd(), ".pi", "dag-tasks", `${env}.json`);
+    if (env?.startsWith(".")) return resolve(cwd, env);
+    if (env) return join(process.env.HOME ?? cwd, ".pi", "dag-tasks", `${env}.json`);
     const scope = cfg.taskScope ?? "session";
     if (scope === "memory") return undefined;
-    if (scope === "project") return join(process.cwd(), ".pi", "dag-tasks", "tasks.json");
+    if (scope === "project") return join(cwd, ".pi", "dag-tasks", "tasks.json");
     const sessionId = ctx?.sessionManager.getSessionId?.() ?? "session";
-    return join(process.cwd(), ".pi", "dag-tasks", `tasks-${sessionId}.json`);
+    return join(cwd, ".pi", "dag-tasks", `tasks-${sessionId}.json`);
   }
 
   function ensureStore(ctx: ExtensionContext): void {
     if (storeReady) return;
+    refreshConfig(resolveCwd(ctx));
     store.setFilePath(resolveStorePath(ctx));
     storeReady = true;
     widget.setStore(store);
@@ -263,7 +261,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", () => widget.dispose());
 
-  pi.on("context", (event, ctx) => {
+  pi.on("context", (_event, ctx) => {
     ensureStore(ctx);
     refreshUi(ctx);
     if (suppressNextReminder) {
@@ -271,8 +269,12 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       return undefined;
     }
     const reminder = buildReminder(store);
-    if (!reminder) return undefined;
-    return { messages: injectReminder(event.messages, reminder) };
+    if (!reminder) {
+      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      return undefined;
+    }
+    pi.events.emit(REMINDER_UPSERT_EVENT, taskReminderIntent(reminder));
+    return undefined;
   });
 
   pi.on("turn_start", (_event, ctx) => {
@@ -283,7 +285,10 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", (event) => {
-    if (TOOL_NAMES.has(event.toolName)) suppressNextReminder = true;
+    if (TOOL_NAMES.has(event.toolName)) {
+      suppressNextReminder = true;
+      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+    }
     return {};
   });
 
@@ -474,14 +479,14 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
         const scope = await ctx.ui.select("Task storage", ["memory", "session", "project", "← Back"]);
         if (scope && scope !== "← Back") {
           cfg.taskScope = scope as "memory" | "session" | "project";
-          saveConfig(cfg);
+          saveConfig(cfg, resolveCwd(ctx));
           storeReady = false;
           ensureStore(ctx);
         }
         const autoArchiveChoice = await ctx.ui.select("Auto-archive completed", ["never", "on_list_complete", "on_task_complete", "← Back"]);
         if (autoArchiveChoice && autoArchiveChoice !== "← Back") {
           cfg.autoArchiveCompleted = autoArchiveChoice as "never" | "on_list_complete" | "on_task_complete";
-          saveConfig(cfg);
+          saveConfig(cfg, resolveCwd(ctx));
         }
         refreshUi(ctx);
         return main();

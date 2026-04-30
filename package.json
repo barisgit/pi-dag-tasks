@@ -12,6 +12,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "pi-reminders": "file:../pi-reminders"
+  },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
