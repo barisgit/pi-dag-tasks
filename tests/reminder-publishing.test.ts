@@ -81,12 +81,12 @@ async function withMemoryTasks<T>(fn: () => Promise<T> | T): Promise<T> {
   }
 }
 
-async function createTask(tools: Map<string, any>, ctx: any, title = "Ship reminders") {
+async function createTask(tools: Map<string, any>, ctx: any, title = "Ship reminders", context?: string) {
   const tool = tools.get("task_manage");
   expect(tool).toBeTruthy();
   await tool.execute(
     "tool-call-1",
-    { action: "create", create: { title, status: "in_progress" } },
+    { action: "create", create: { title, status: "in_progress", context } },
     new AbortController().signal,
     () => {},
     ctx,
@@ -102,7 +102,7 @@ describe("task reminder publishing", () => {
     await withMemoryTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
-      await createTask(tools, ctx);
+      await createTask(tools, ctx, "Ship reminders", "Very long active context should not be emitted into the volatile reminder trailer.");
 
       const messages = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
       const result = handlers.get("context")?.({ messages }, ctx);
@@ -121,6 +121,8 @@ describe("task reminder publishing", () => {
       });
       expect(upserts[0].payload.text).toContain("Task state:");
       expect(upserts[0].payload.text).toContain("Active: #1 Ship reminders");
+      expect(upserts[0].payload.text).not.toContain("Active context:");
+      expect(upserts[0].payload.text).not.toContain("Very long active context");
       expect(upserts[0].payload.text).not.toContain("<task-reminder>");
     });
   });

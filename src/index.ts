@@ -187,10 +187,9 @@ function buildReminder(store: DagTaskStore): string | undefined {
   ];
   if (active[0]) {
     parts.push(`Active: #${active[0].id} ${active[0].title}`);
-    if (active[0].context) parts.push(`Active context: ${truncateText(active[0].context, 800)}`);
   }
   if (ready.length > 0) parts.push(`Ready next: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}`);
-  parts.push("For multi-step workflows, keep task statuses current and use task_next for ready work.");
+  parts.push("Keep task statuses current; use task_next for ready work.");
   return parts.join("\n");
 }
 
