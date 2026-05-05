@@ -97,7 +97,7 @@ Context is intentionally rendered selectively:
 
 ## Reminder behavior
 
-The extension publishes compact task reminder intents to `pi-reminders` before each LLM call when active tasks exist. `pi-reminders` renders them as a volatile cache-aware trailer instead of mutating transcript messages or tool results. The reminder leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It is not persisted as a session message and does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+The extension publishes compact persistent task reminder intents to `pi-reminders` when active tasks exist. `pi-reminders` writes them as durable `<system-reminder>` history messages when task state changes and repeats them every 10 turns. The reminder leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
 
 When all tasks are complete, the reminder nudges verification before finalization and archival. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 

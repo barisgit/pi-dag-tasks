@@ -20,6 +20,7 @@ function isProcessRunning(pid: number): boolean {
 }
 
 function acquireLock(lockPath: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       writeFileSync(lockPath, String(process.pid), { flag: "wx" });
@@ -99,6 +100,7 @@ export class DagTaskStore {
 
   private save(): void {
     if (!this.filePath) return;
+    mkdirSync(dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
     const data: StoreData = { nextId: this.nextId, tasks: [...this.tasks.values()] };
     writeFileSync(tmp, JSON.stringify(data, null, 2));

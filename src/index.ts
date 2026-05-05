@@ -255,6 +255,8 @@ function taskReminderIntent(text: string): ReminderIntent {
     label: "Tasks",
     priority: TASK_REMINDER_PRIORITY,
     ttl: "persistent",
+    repeatEveryTurns: 10,
+    display: false,
     text,
   };
 }

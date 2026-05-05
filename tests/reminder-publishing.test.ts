@@ -118,6 +118,8 @@ describe("task reminder publishing", () => {
         label: "Tasks",
         priority: 20,
         ttl: "persistent",
+        repeatEveryTurns: 10,
+        display: false,
       });
       expect(upserts[0].payload.text).toContain("Task state:");
       expect(upserts[0].payload.text).toContain("Active: #1 Ship reminders");
