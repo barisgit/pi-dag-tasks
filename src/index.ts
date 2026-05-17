@@ -178,8 +178,8 @@ function buildReminder(store: DagTaskStore): string | undefined {
   const completed = tasks.filter((task) => task.status === "completed").length;
   const open = tasks.length - completed;
   if (open === 0) {
-    const parts = ["All tasks are completed. Before finalizing, verify if appropriate or state why verification was not run. Archive completed tasks after the user has seen the result or when they are no longer useful for review."];
-    if (shouldNudgeVerification(tasks)) parts.push("All tasks are completed, but no verification task is recorded. Before finalizing, verify the work if practical, or state why verification was not run.");
+    const parts = ["All tasks are completed. Before finalizing, verify if appropriate or state why verification was not run. If ready for user review, archive completed tasks."];
+    if (shouldNudgeVerification(tasks)) parts.push("No verification task is recorded. Verify the work if practical, or state why verification was not run before finalizing.");
     return parts.join("\n");
   }
   const parts = [
@@ -189,7 +189,7 @@ function buildReminder(store: DagTaskStore): string | undefined {
     parts.push(`Active: #${active[0].id} ${active[0].title}`);
   }
   if (ready.length > 0) parts.push(`Ready next: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}`);
-  parts.push("Keep task statuses current; use task_next for ready work.");
+  parts.push("Keep statuses current; use task_next for ready work and complete/archive when done.");
   return parts.join("\n");
 }
 
@@ -360,21 +360,22 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "task_manage",
     label: "Task Manage",
-    description: "Manage Pi's task list: the durable todo/progress tracker for multi-step work. Use action:'create' for single or batch creation via create/creates; dependencies use task IDs like '1', not titles. Use context for durable intent and status:'in_progress' when starting immediately.",
+    description: "Manage Pi's task list: the durable todo/progress tracker for non-trivial work. Create/update it early, keep statuses current, and archive completed tasks when ready. Use action:'create' for single or batch creation via create/creates; dependencies use task IDs like '1', not titles.",
     promptSnippet: "Manage task list",
     promptGuidelines: [
-      "This is Pi's single task/todo tracker. Use task_manage instead of writing separate informal todo lists in prose when tracking is appropriate.",
+      "This is Pi's single task/todo tracker. When tracking is appropriate, use task_manage instead of writing informal todo lists in prose.",
       "Use proactively for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression.",
       "Skip task_manage for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps.",
-      "Size the task list to the actual work; there is no maximum task count. Long or complex processes may warrant 20+ tasks when that preserves clarity, dependencies, or checkpoints.",
-      "Start with the smallest useful task list and expand it when exploration reveals real subwork, dependencies, or blockers; do not compress genuinely distinct work into an artificial 6-8 task range.",
+      "Size the task list to the active execution slice, not the whole roadmap. If a charter owns milestones or acceptance criteria, do not duplicate that plan in tasks.",
+      "Start with the smallest useful task list and expand it when exploration reveals real subwork, dependencies, or blockers; avoid both giant charter clones and artificial 6-8 task ranges.",
       "Use action:'create' for both create and creates; there is no action:'creates'.",
       "Dependency fields blockedBy/blocks/addBlockedBy/addBlocks must contain task IDs like '1', not task titles; create first, then update dependencies if you need generated IDs.",
       "Use dependencies only when they change what can start next; blocked work is represented with blockedBy/blocks dependencies, not a separate blocked status.",
       "Normally keep one task in_progress per active worker. Multiple in_progress tasks are valid only for genuine parallel work or distinct owners/subagents.",
-      "When creating a task map, add context to pending tasks up front: constraints, relevant findings, expected inputs, dependencies, and definition of done; update context as decisions/outcomes emerge.",
+      "When creating tasks, add context up front: constraints, relevant findings, expected inputs, and definition of done for the current execution slice; update context as decisions/outcomes emerge.",
       "Keep tasks outcome-oriented and verifiable, not microscopic. For tests, builds, lint, typecheck, manual review, or output inspection tasks, set metadata.kind = 'verification'.",
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
+      "Archive completed tasks once they are ready to leave the active review surface.",
       "Use task_next for ready/unblocked work; don't start blocked tasks.",
     ],
     parameters: TaskManageParams,

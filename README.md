@@ -2,7 +2,7 @@
 
 Lean unified task manager for the Pi coding agent. In Pi, tasks are the todo/progress list.
 
-Design goal: keep the LLM tool surface small while preserving dependency-aware task tracking, verification nudges, and durable progress across compression.
+Design goal: keep the LLM tool surface small while preserving dependency-aware execution tracking, verification nudges, and durable progress across compression. `pi-dag-tasks` is working memory for the active execution slice; durable roadmap planning, milestones, acceptance criteria, and evidence gates belong in `pi-charter`.
 
 ## Tools
 
@@ -55,7 +55,7 @@ History is compact by default. Add `"includeContext": true` when you want archiv
 { "action": "history", "limit": 20, "includeContext": true }
 ```
 
-Use `purge` only for true destructive removal from the active DAG. Completed work should usually be archived, not purged.
+Use `purge` only for true destructive removal from the active DAG. Completed work should usually be archived, not purged; archive once it is ready to leave the active review surface.
 
 ## Task sizing
 
@@ -63,9 +63,10 @@ Use the smallest task list that preserves quality:
 
 - no task list for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps
 - use a task list for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression
-- size the task list to the actual work; there is no maximum task count
-- use as many tasks as needed for clarity, dependencies, and checkpoints, including 20+ tasks for long or complex processes
-- avoid compressing genuinely distinct work into an artificial 6-8 task range
+- size the task list to the active execution slice, not the whole roadmap
+- if a charter owns milestones or acceptance criteria, do not duplicate that plan in tasks; create only the next actionable slice
+- use as many tasks as needed for clarity, dependencies, and checkpoints within that slice
+- avoid both giant charter clones and artificial 6-8 task ranges
 - use dependencies only when they change what can start next
 - start with the smallest useful task list and expand it as exploration reveals real subwork
 
@@ -97,9 +98,9 @@ Context is intentionally rendered selectively:
 
 ## Reminder behavior
 
-The extension publishes compact persistent task reminder intents to `pi-reminders` when active tasks exist. `pi-reminders` writes them as durable `<system-reminder>` history messages when task state changes and repeats them every 10 turns. The reminder leads with open-work counts and points to ready work, but it does not force immediate archival when work is complete; completed tasks can remain visible while awaiting user review. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+The extension publishes compact persistent task reminder intents to `pi-reminders` when active tasks exist. `pi-reminders` writes them as durable `<system-reminder>` history messages when task state changes and repeats them every 10 turns. The reminder leads with open-work counts, points to ready work, and keeps task hygiene visible without restating the full task-management policy. When all tasks are complete, it nudges verification and archival once tasks are ready to leave the active review surface. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
 
-When all tasks are complete, the reminder nudges verification before finalization and archival. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
+When all tasks are complete, the reminder nudges verification before finalization and archival. If completed tasks are ready for user review or no longer need to stay visible, archive them. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 
 ## Storage
 
