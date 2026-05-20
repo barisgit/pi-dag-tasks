@@ -68,6 +68,9 @@ Use the smallest task list that preserves quality:
 - use as many tasks as needed for clarity, dependencies, and checkpoints within that slice
 - avoid both giant charter clones and artificial 6-8 task ranges
 - use dependencies only when they change what can start next
+- keep statuses current as work finishes; avoid batching completions at the end
+- only mark tasks completed when the work is fully done, including verification when appropriate
+- prefer ready tasks in ID order when multiple tasks are available
 - start with the smallest useful task list and expand it as exploration reveals real subwork
 
 ## UI

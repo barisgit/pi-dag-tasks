@@ -123,6 +123,8 @@ describe("task reminder publishing", () => {
       });
       expect(upserts[0].payload.text).toContain("Task state:");
       expect(upserts[0].payload.text).toContain("Active: #1 Ship reminders");
+      expect(upserts[0].payload.text).toContain("complete finished tasks promptly");
+      expect(upserts[0].payload.text).toContain("archive reviewed tasks");
       expect(upserts[0].payload.text).not.toContain("Active context:");
       expect(upserts[0].payload.text).not.toContain("Very long active context");
       expect(upserts[0].payload.text).not.toContain("<task-reminder>");

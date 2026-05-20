@@ -189,7 +189,7 @@ function buildReminder(store: DagTaskStore): string | undefined {
     parts.push(`Active: #${active[0].id} ${active[0].title}`);
   }
   if (ready.length > 0) parts.push(`Ready next: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}`);
-  parts.push("Keep statuses current; use task_next for ready work and complete/archive when done.");
+  parts.push("Keep statuses current; complete finished tasks promptly; archive reviewed tasks when they no longer need to stay visible; use task_next for ready work in ID order.");
   return parts.join("\n");
 }
 
@@ -376,8 +376,10 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       "When creating tasks, add context up front: constraints, relevant findings, expected inputs, and definition of done for the current execution slice; update context as decisions/outcomes emerge.",
       "Keep tasks outcome-oriented and verifiable, not microscopic. For tests, builds, lint, typecheck, manual review, or output inspection tasks, set metadata.kind = 'verification'.",
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
+      "Complete tasks as soon as their work is fully done; avoid batching status updates at the end.",
+      "Only mark completed work that is actually finished; if verification is appropriate, complete after running it or record why it was skipped.",
       "Archive completed tasks once they are ready to leave the active review surface.",
-      "Use task_next for ready/unblocked work; don't start blocked tasks.",
+      "Use task_next for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
     ],
     parameters: TaskManageParams,
     async execute(_toolCallId, params: TaskManageParamsType, _signal, _onUpdate, ctx) {
@@ -450,7 +452,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     label: "Task Next",
     description: "Return ready/unblocked tasks from Pi's task list and a compact summary.",
     promptSnippet: "Next ready tasks",
-    promptGuidelines: ["Use after completing work or when resuming; don't start blocked tasks."],
+    promptGuidelines: ["Use after completing work or when resuming; prefer ready tasks in ID order and don't start blocked tasks."],
     parameters: TaskNextParams,
     async execute(_toolCallId, params: { limit?: number; includeBlocked?: boolean; includeCompleted?: boolean }, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
