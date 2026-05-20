@@ -271,7 +271,7 @@ function taskReminderRemoveRequest(): ReminderRemoveRequest {
 export default function dagTasksExtension(pi: ExtensionAPI): void {
   const cfg: DagTasksConfig = {};
   let store = new DagTaskStore();
-  const widget = new DagTaskWidget(store);
+  const widget = new DagTaskWidget(store, () => cfg);
   const autoArchive = new AutoArchiveManager(() => store, () => cfg.autoArchiveCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY_TURNS);
   let currentTurn = 0;
   let storeReady = false;
@@ -284,6 +284,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   function refreshConfig(cwd: string): void {
     delete cfg.taskScope;
     delete cfg.autoArchiveCompleted;
+    delete cfg.animateActiveTasks;
     Object.assign(cfg, loadConfig(cwd));
   }
 

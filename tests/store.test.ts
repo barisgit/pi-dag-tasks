@@ -27,4 +27,21 @@ describe("DagTaskStore", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("persists start and completion timestamps from task status", () => {
+    const store = new DagTaskStore();
+
+    const created = store.create({ title: "Running", status: "in_progress" }).task;
+    expect(typeof created.startedAt).toBe("number");
+    expect(created.completedAt).toBeUndefined();
+
+    const startedAt = created.startedAt;
+    const completed = store.update({ id: created.id, status: "completed" }).task;
+    expect(completed?.startedAt).toBe(startedAt);
+    expect(typeof completed?.completedAt).toBe("number");
+
+    const reset = store.update({ id: created.id, status: "pending" }).task;
+    expect(reset?.startedAt).toBeUndefined();
+    expect(reset?.completedAt).toBeUndefined();
+  });
 });

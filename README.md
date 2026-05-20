@@ -75,10 +75,11 @@ Use the smallest task list that preserves quality:
 Inspired by `tintinweb/pi-tasks`, but smaller:
 
 - persistent widget above the editor
-- status icons: `✔` completed, `◼` in progress, `◻` pending
+- compact header: `Tasks · M/N done · X active`
+- status icons: `✔` completed, `◼` in progress, `◻` pending, `◫` blocked
 - strikethrough completed items
-- spinner for active `in_progress` tasks with elapsed time
-- Claude-like compact mode for long lists: summarize completed items, show the first open tasks, then `+N pending`
+- static in-progress rows with elapsed time by default; optional spinner animation via config
+- compact mode preserves task order, drops completed rows from the body first, then appends `+N open` if unfinished rows still do not fit
 - compact footer status
 - `/tasks` interactive command for view/create/archive/history/settings; archived tasks are viewable even when no active tasks remain
 
@@ -111,6 +112,8 @@ Storage modes:
 - `memory` — no files
 - `session` — `.pi/dag-tasks/tasks-<sessionId>.json` default
 - `project` — `.pi/dag-tasks/tasks.json`
+
+Widget animation is disabled by default. Set `animateActiveTasks: true` in the config file to animate in-progress task icons; static in-progress tasks still show elapsed time from the persisted `startedAt` timestamp.
 
 Archived tasks are appended to `.pi/dag-tasks/archive.jsonl` and are available through `task_manage` with `action: "history"`. History is shown newest-first with archive time and reason (`manual archive` or `completed sweep`). Archived context is hidden by default; pass `includeContext: true` for detailed history.
 

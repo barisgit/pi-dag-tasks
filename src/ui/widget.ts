@@ -1,5 +1,6 @@
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import type { DagTaskStore } from "../store.js";
+import type { DagTasksConfig } from "../types.js";
 
 interface ThemeLike {
   fg(color: string, text: string): string;
@@ -12,9 +13,8 @@ interface UiLike {
 }
 
 const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
-const MAX_VISIBLE = 10;
-const COMPACT_VISIBLE_OPEN = 6;
-const COMPACT_VISIBLE_COMPLETED = 4;
+const MAX_BODY_ROWS = 8;
+const COMPACT_COMPLETED_ROWS = 2;
 
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -27,26 +27,26 @@ function formatDuration(ms: number): string {
   return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
 }
 
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (predicate(items[i])) return i;
+  }
+  return -1;
+}
+
 export class DagTaskWidget {
   private ui?: UiLike;
   private frame = 0;
   private interval?: ReturnType<typeof setInterval>;
   private tui?: { terminal?: { columns?: number }; requestRender?: () => void };
   private registered = false;
-  private activeSince = new Map<string, number>();
 
-  constructor(private store: DagTaskStore) {}
+  constructor(private store: DagTaskStore, private config: () => DagTasksConfig = () => ({})) {}
 
   setStore(store: DagTaskStore): void { this.store = store; }
   setUi(ui: UiLike): void { this.ui = ui; }
 
-  markActive(id: string, active: boolean): void {
-    if (active) {
-      if (!this.activeSince.has(id)) this.activeSince.set(id, Date.now());
-      this.ensureTimer();
-    } else {
-      this.activeSince.delete(id);
-    }
+  markActive(_id: string, _active: boolean): void {
     this.update();
   }
 
@@ -64,11 +64,7 @@ export class DagTaskWidget {
       return;
     }
 
-    for (const id of [...this.activeSince.keys()]) {
-      const task = this.store.get(id);
-      if (!task || task.status !== "in_progress") this.activeSince.delete(id);
-    }
-    if (this.activeSince.size > 0) this.ensureTimer();
+    if (tasks.some((task) => task.status === "in_progress")) this.ensureTimer();
     else this.stopTimer();
     this.frame++;
 
@@ -98,55 +94,56 @@ export class DagTaskWidget {
     const completed = tasks.filter((task) => task.status === "completed");
     const openTasks = tasks.filter((task) => task.status !== "completed");
     const active = openTasks.filter((task) => task.status === "in_progress").length;
-    const compact = tasks.length > MAX_VISIBLE;
-    const lines = [truncate(`${theme.fg("accent", "●")} ${theme.fg("accent", `${openTasks.length}/${tasks.length} tasks open${active ? ` · ${active} in progress` : ""}`)}`)];
+    const compact = tasks.length > MAX_BODY_ROWS;
+    const header = `Tasks · ${completed.length}/${tasks.length} done${active ? ` · ${active} active` : ""}`;
+    const lines = [truncate(` ${theme.fg("accent", header)}`)];
     if (!compact) {
-      for (const task of tasks.slice(0, MAX_VISIBLE)) lines.push(truncate(this.renderTask(task, theme)));
+      for (const task of tasks) lines.push(truncate(this.renderTask(task, theme)));
       return [...lines, ""];
     }
 
-    const visible = this.compactVisibleCounts(openTasks.length, completed.length);
-    for (const task of completed.slice(0, visible.completed)) lines.push(truncate(this.renderTask(task, theme)));
-    const hiddenCompleted = completed.length - visible.completed;
-    if (hiddenCompleted > 0) lines.push(truncate(theme.fg("dim", `  +${hiddenCompleted} more completed`)));
-
-    for (const task of openTasks.slice(0, visible.open)) lines.push(truncate(this.renderTask(task, theme)));
-    const hiddenOpen = openTasks.length - visible.open;
-    if (hiddenOpen > 0) lines.push(truncate(theme.fg("dim", `  +${hiddenOpen} pending`)));
+    const recentCompletedIds = new Set(completed
+      .slice()
+      .sort((a, b) => ((b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt)) || (Number(b.id) - Number(a.id)))
+      .slice(0, COMPACT_COMPLETED_ROWS)
+      .map((task) => task.id));
+    const visibleTasks = tasks.filter((task) => task.status !== "completed" || recentCompletedIds.has(task.id));
+    let hiddenOpen = 0;
+    while (visibleTasks.length + (hiddenOpen > 0 ? 1 : 0) > MAX_BODY_ROWS) {
+      const removeAt = findLastIndex(visibleTasks, (task) => task.status !== "completed");
+      if (removeAt === -1) break;
+      visibleTasks.splice(removeAt, 1);
+      hiddenOpen++;
+    }
+    for (const task of visibleTasks) lines.push(truncate(this.renderTask(task, theme)));
+    if (hiddenOpen > 0) lines.push(truncate(theme.fg("dim", `  +${hiddenOpen} open`)));
     return [...lines, ""];
-  }
-
-  private compactVisibleCounts(openCount: number, completedCount: number): { open: number; completed: number } {
-    let completed = Math.min(COMPACT_VISIBLE_COMPLETED, completedCount);
-    let open = Math.min(COMPACT_VISIBLE_OPEN, openCount);
-    const rowCount = () => completed + (completedCount > completed ? 1 : 0) + open + (openCount > open ? 1 : 0);
-    while (rowCount() > MAX_VISIBLE && open > 0) open--;
-    while (rowCount() > MAX_VISIBLE && completed > 0) completed--;
-    return { open, completed };
   }
 
   private renderTask(task: ReturnType<DagTaskStore["list"]>[number], theme: ThemeLike): string {
     const blockers = this.store.openBlockers(task);
-    const isSpinning = task.status === "in_progress" && this.activeSince.has(task.id);
+    const isSpinning = task.status === "in_progress" && (this.config().animateActiveTasks ?? false);
     const icon = isSpinning ? theme.fg("accent", SPINNER[this.frame % SPINNER.length] ?? "✳")
       : task.status === "completed" ? theme.fg("success", "✔")
+      : blockers.length ? theme.fg("dim", "◫")
       : task.status === "in_progress" ? theme.fg("accent", "◼") : "◻";
     const id = theme.fg("dim", `#${task.id}`);
     const blocked = blockers.length ? theme.fg("dim", ` › blocked by ${blockers.map((x) => `#${x}`).join(", ")}`) : "";
-    if (isSpinning) {
-      const elapsed = formatDuration(Date.now() - (this.activeSince.get(task.id) ?? Date.now()));
-      return `  ${icon} ${id} ${theme.fg("accent", task.activeForm || task.title)} ${theme.fg("dim", `(${elapsed})`)}${blocked}`;
+    if (task.status === "in_progress") {
+      const elapsed = task.startedAt ? ` ${theme.fg("dim", `(${formatDuration(Date.now() - task.startedAt)})`)}` : "";
+      return `  ${icon} ${id} ${theme.fg("accent", task.activeForm || task.title)}${elapsed}${blocked}`;
     }
     if (task.status === "completed") return `  ${icon} ${theme.fg("dim", theme.strikethrough(`#${task.id} ${task.title}`))}`;
+    if (blockers.length) return `  ${icon} ${id} ${theme.fg("dim", task.title)}${blocked}`;
     return `  ${icon} ${id} ${task.title}${blocked}`;
   }
 
   private ensureTimer(): void {
-    if (!this.interval) this.interval = setInterval(() => this.update(), 120);
+    if (!this.interval) this.interval = setInterval(() => this.update(), this.config().animateActiveTasks ? 120 : 30_000);
   }
 
   private stopTimer(): void {
-    if (!this.interval || this.activeSince.size > 0) return;
+    if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = undefined;
   }

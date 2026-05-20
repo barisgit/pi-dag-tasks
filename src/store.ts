@@ -145,6 +145,8 @@ export class DagTaskStore {
         blockedBy: [],
         metadata: input.metadata ?? {},
         createdAt: now,
+        startedAt: input.status === "in_progress" ? now : undefined,
+        completedAt: input.status === "completed" ? now : undefined,
         updatedAt: now,
       };
       this.tasks.set(task.id, task);
@@ -161,7 +163,16 @@ export class DagTaskStore {
       if (patch.title !== undefined) { task.title = patch.title; changed.push("title"); }
       if (patch.description !== undefined) { task.description = patch.description; changed.push("description"); }
       if (patch.context !== undefined) { task.context = patch.context || undefined; changed.push("context"); }
-      if (patch.status !== undefined) { task.status = patch.status; changed.push("status"); }
+      if (patch.status !== undefined) {
+        task.status = patch.status;
+        if (patch.status === "in_progress" && task.startedAt === undefined) task.startedAt = Date.now();
+        if (patch.status === "pending") {
+          task.startedAt = undefined;
+          task.completedAt = undefined;
+        }
+        if (patch.status === "completed" && task.completedAt === undefined) task.completedAt = Date.now();
+        changed.push("status");
+      }
       if (patch.activeForm !== undefined) { task.activeForm = patch.activeForm; changed.push("activeForm"); }
       if (patch.owner !== undefined) { task.owner = patch.owner ?? undefined; changed.push("owner"); }
       if (patch.metadata) {
