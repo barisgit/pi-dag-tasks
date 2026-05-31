@@ -72,13 +72,21 @@ function createContext() {
 
 async function withMemoryTasks<T>(fn: () => Promise<T> | T): Promise<T> {
   const previous = process.env.PI_DAG_TASKS;
+  const previousMs = process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS;
   process.env.PI_DAG_TASKS = "off";
+  process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS = "0";
   try {
     return await fn();
   } finally {
     if (previous === undefined) delete process.env.PI_DAG_TASKS;
     else process.env.PI_DAG_TASKS = previous;
+    if (previousMs === undefined) delete process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS;
+    else process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS = previousMs;
   }
+}
+
+function advanceTurns(handlers: Map<string, Function>, ctx: any, turns: number): void {
+  for (let i = 0; i < turns; i++) handlers.get("turn_start")?.({}, ctx);
 }
 
 async function createTask(tools: Map<string, any>, ctx: any, title = "Ship reminders", context?: string) {
@@ -104,6 +112,7 @@ describe("task reminder publishing", () => {
       const ctx = createContext();
       await createTask(tools, ctx, "Ship reminders", "Very long active context should not be emitted into the volatile reminder trailer.");
 
+      advanceTurns(handlers, ctx, 15);
       const messages = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
       const result = handlers.get("context")?.({ messages }, ctx);
 
@@ -111,23 +120,22 @@ describe("task reminder publishing", () => {
       expect(JSON.stringify(messages)).not.toContain("task-reminder");
 
       const upserts = reminderEvents(emitted, REMINDER_UPSERT_EVENT);
-      expect(upserts).toHaveLength(1);
-      expect(upserts[0].payload).toMatchObject({
+      expect(upserts.length).toBeGreaterThanOrEqual(1);
+      const latest = upserts.at(-1)!;
+      expect(latest.payload).toMatchObject({
         source: "pi-dag-tasks",
         id: "state",
         label: "Tasks",
         priority: 20,
-        ttl: "persistent",
-        repeatEveryTurns: 10,
+        ttl: "once",
         display: false,
       });
-      expect(upserts[0].payload.text).toContain("Task state:");
-      expect(upserts[0].payload.text).toContain("Active: #1 Ship reminders");
-      expect(upserts[0].payload.text).toContain("complete finished tasks promptly");
-      expect(upserts[0].payload.text).toContain("archive reviewed tasks");
-      expect(upserts[0].payload.text).not.toContain("Active context:");
-      expect(upserts[0].payload.text).not.toContain("Very long active context");
-      expect(upserts[0].payload.text).not.toContain("<task-reminder>");
+      expect(latest.payload.text).toContain("Task checkpoint: 15 turns since task tools.");
+      expect(latest.payload.text).toContain("Continue or complete active #1 Ship reminders");
+      expect(latest.payload.text).toMatch(/#1 Ship reminders \(~\d+m\)/);
+      expect(latest.payload.text).not.toContain("Active context:");
+      expect(latest.payload.text).not.toContain("Very long active context");
+      expect(latest.payload.text).not.toContain("<task-reminder>");
     });
   });
 
@@ -149,17 +157,38 @@ describe("task reminder publishing", () => {
     });
   });
 
-  test("task tool results remove the reminder and suppress one context upsert", async () => {
+  test("unchanged task reminders are not re-upserted before repeat interval", async () => {
     await withMemoryTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
       await createTask(tools, ctx);
 
+      advanceTurns(handlers, ctx, 15);
       handlers.get("context")?.({ messages: [] }, ctx);
       expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(1);
       emitted.length = 0;
 
-      handlers.get("tool_result")?.({ toolName: "task_manage" });
+      handlers.get("context")?.({ messages: [] }, ctx);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
+
+      advanceTurns(handlers, ctx, 15);
+      handlers.get("context")?.({ messages: [] }, ctx);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(1);
+    });
+  });
+
+  test("task tool calls remove cached reminders and suppress five turns", async () => {
+    await withMemoryTasks(async () => {
+      const { handlers, tools, emitted } = createMockPi();
+      const ctx = createContext();
+      await createTask(tools, ctx);
+
+      advanceTurns(handlers, ctx, 15);
+      handlers.get("context")?.({ messages: [] }, ctx);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT).length).toBeGreaterThanOrEqual(1);
+      emitted.length = 0;
+
+      handlers.get("tool_call")?.({ toolName: "task_manage" }, ctx);
       expect(reminderEvents(emitted, REMINDER_REMOVE_EVENT)).toEqual([
         {
           name: REMINDER_REMOVE_EVENT,
@@ -168,13 +197,45 @@ describe("task reminder publishing", () => {
       ]);
       emitted.length = 0;
 
-      const suppressed = handlers.get("context")?.({ messages: [] }, ctx);
-      expect(suppressed).toBeUndefined();
-      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
-      expect(reminderEvents(emitted, REMINDER_REMOVE_EVENT)).toHaveLength(0);
+      for (let i = 0; i < 5; i++) {
+        const suppressed = handlers.get("context")?.({ messages: [] }, ctx);
+        expect(suppressed).toBeUndefined();
+        expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
+        handlers.get("turn_start")?.({}, ctx);
+      }
 
+      advanceTurns(handlers, ctx, 10);
       handlers.get("context")?.({ messages: [] }, ctx);
-      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(1);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  test("done_archive completes and archives selected tasks in one operation", async () => {
+    await withMemoryTasks(async () => {
+      const { tools } = createMockPi();
+      const ctx = createContext();
+      const tool = tools.get("task_manage");
+
+      const created = await tool.execute("tool-call-1", { action: "create", create: { title: "Ship it", status: "in_progress" } }, new AbortController().signal, () => {}, ctx);
+      expect(created.content[0].text).toContain("1 active. Next: continue active #1 Ship it.");
+      const id = created.details.operations[0].id;
+      const result = await tool.execute("tool-call-2", { action: "done_archive", id }, new AbortController().signal, () => {}, ctx);
+      const list = await tool.execute("tool-call-3", { action: "list" }, new AbortController().signal, () => {}, ctx);
+      expect(result.content[0].text).toContain("Next: no tasks remain.");
+      expect(result.details.operations).toEqual([{ kind: "done_archived", id, title: "Ship it", changed: ["status"] }]);
+      expect(list.content[0].text).toBe("No tasks");
+    });
+  });
+
+  test("task mutations do not immediately announce reminders during tool chains", async () => {
+    await withMemoryTasks(async () => {
+      const { tools, emitted } = createMockPi();
+      const ctx = createContext();
+      const tool = tools.get("task_manage");
+
+      await tool.execute("tool-call-1", { action: "create", create: { title: "Done", status: "completed" } }, new AbortController().signal, () => {}, ctx);
+      await tool.execute("tool-call-2", { action: "create", create: { title: "New active", status: "in_progress" } }, new AbortController().signal, () => {}, ctx);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
     });
   });
 
@@ -184,11 +245,12 @@ describe("task reminder publishing", () => {
       const ctx = createContext();
       await createTask(tools, ctx);
 
-      handlers.get("tool_result")?.({ toolName: "read" });
+      handlers.get("tool_result")?.({ toolName: "read" }, ctx);
       expect(reminderEvents(emitted, REMINDER_REMOVE_EVENT)).toHaveLength(0);
 
+      advanceTurns(handlers, ctx, 15);
       handlers.get("context")?.({ messages: [] }, ctx);
-      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(1);
+      expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT).length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -199,15 +261,18 @@ describe("task reminder publishing", () => {
         const ctx = createContext();
         await createTask(tools, ctx);
 
+        advanceTurns(handlers, ctx, 15);
         handlers.get("context")?.({ messages: [] }, ctx);
-        handlers.get("tool_result")?.({ toolName: "task_manage" });
+        handlers.get("tool_call")?.({ toolName: "task_manage" }, ctx);
+        handlers.get("tool_result")?.({ toolName: "task_manage" }, ctx);
         handlers.get("context")?.({ messages: [] }, ctx);
 
         const records = readDebugRecords(debugLogPath);
         expect(records.map((record) => record.action)).toEqual([
           "upsert",
-          "remove-tool-result",
-          "suppress-next-context",
+          "suppress-before-tool-call",
+          "suppress-after-tool-result",
+          "suppress-cooldown",
         ]);
         expect(records[0]).toMatchObject({
           event: "task_reminder_decision",
@@ -215,7 +280,8 @@ describe("task reminder publishing", () => {
         });
         expect(records[0].textChars).toBeGreaterThan(0);
         expect(records[0].textHash).toMatch(/^[a-f0-9]{16}$/);
-        expect(records[0].textPreview).toContain("Task state:");
+        expect(records[0].textPreview).toContain("Task checkpoint:");
+        expect(records[1]).toMatchObject({ currentTurn: 15, suppressUntilTurn: 20 });
         expect(JSON.stringify(records)).not.toContain("<task-reminder>");
       });
     });

@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { DagTaskStore } from "../store.js";
 import type { DagTasksConfig } from "../types.js";
 
@@ -68,15 +68,12 @@ export class DagTaskWidget {
     else this.stopTimer();
     this.frame++;
 
-    if (!this.registered) {
-      this.ui.setWidget("dag-tasks", (tui, theme) => {
-        this.tui = tui;
-        return { render: () => this.render(tui, theme), invalidate: () => {} };
-      }, { placement: "aboveEditor" });
-      this.registered = true;
-    } else {
-      this.tui?.requestRender?.();
-    }
+    this.ui.setWidget("dag-tasks", (tui, theme) => {
+      this.tui = tui;
+      return { render: () => this.render(tui, theme), invalidate: () => {} };
+    }, { placement: "aboveEditor" });
+    this.registered = true;
+    this.tui?.requestRender?.();
   }
 
   dispose(): void {
@@ -125,17 +122,17 @@ export class DagTaskWidget {
     const isSpinning = task.status === "in_progress" && (this.config().animateActiveTasks ?? false);
     const icon = isSpinning ? theme.fg("accent", SPINNER[this.frame % SPINNER.length] ?? "✳")
       : task.status === "completed" ? theme.fg("success", "✔")
-      : blockers.length ? theme.fg("dim", "◫")
-      : task.status === "in_progress" ? theme.fg("accent", "◼") : "◻";
+      : blockers.length ? theme.fg("warning", "◫")
+      : task.status === "in_progress" ? theme.fg("accent", "◼") : theme.fg("muted", "◻");
     const id = theme.fg("dim", `#${task.id}`);
-    const blocked = blockers.length ? theme.fg("dim", ` › blocked by ${blockers.map((x) => `#${x}`).join(", ")}`) : "";
+    const blocked = blockers.length ? ` ${theme.fg("warning", "!")} ${theme.fg("dim", `blocked by ${blockers.map((x) => `#${x}`).join(", ")}`)}` : "";
     if (task.status === "in_progress") {
       const elapsed = task.startedAt ? ` ${theme.fg("dim", `(${formatDuration(Date.now() - task.startedAt)})`)}` : "";
       return `  ${icon} ${id} ${theme.fg("accent", task.activeForm || task.title)}${elapsed}${blocked}`;
     }
     if (task.status === "completed") return `  ${icon} ${theme.fg("dim", theme.strikethrough(`#${task.id} ${task.title}`))}`;
     if (blockers.length) return `  ${icon} ${id} ${theme.fg("dim", task.title)}${blocked}`;
-    return `  ${icon} ${id} ${task.title}${blocked}`;
+    return `  ${icon} ${id} ${theme.fg("muted", task.title)}${blocked}`;
   }
 
   private ensureTimer(): void {

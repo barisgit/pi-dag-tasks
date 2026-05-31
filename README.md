@@ -4,16 +4,18 @@ Lean unified task manager for the Pi coding agent. In Pi, tasks are the todo/pro
 
 Design goal: keep the LLM tool surface small while preserving dependency-aware execution tracking, verification nudges, and durable progress across compression. `pi-dag-tasks` is working memory for the active execution slice; durable roadmap planning, milestones, acceptance criteria, and evidence gates belong in `pi-charter`.
 
+Use tasks for durable state, not ceremony. Create the smallest useful task set for the current execution slice: meaningful outcomes that can be started, blocked, completed, or verified. Avoid giant roadmap clones, speculative future work, and microscopic process tasks such as opening a file, editing one string, or replying to the user.
+
 ## Tools
 
 Only two LLM-callable tools are exposed:
 
 - `task_manage` — Pi's single task/todo tracker for batch CRUD/status/dependency/archive/history operations
-  - actions: `create`, `update`, `complete`, `archive`, `purge`, `list`, `history`
+  - actions: `create`, `update`, `complete`, `done_archive`, `archive`, `purge`, `list`, `history`
   - use `action: "create"` for both single `create` and batch `creates`; there is no `action: "creates"`
   - supports batch fields: `creates`, `updates`, `ids`
   - dependency fields: `blockedBy`, `blocks`, `addBlockedBy`, `addBlocks`, `removeBlockedBy`, `removeBlocks`; values must be task IDs like `"1"`, not task titles
-  - `context` field preserves durable handoff instructions and outcomes across compression; add context to pending tasks up front, then update it as decisions/outcomes emerge
+  - `context` field preserves durable setup across compression; write it up front and update it only when durable new information changes how the task should be done or the original context is wrong/incomplete
   - for tests, builds, lint, typecheck, manual review, or output inspection tasks, prefer `metadata.kind: "verification"`
   - create accepts initial `status`, so one call can create multiple tasks with one or more already `in_progress`
 - `task_next` — compact summary plus ready/unblocked tasks, including context for active/ready tasks
@@ -88,9 +90,9 @@ Inspired by `tintinweb/pi-tasks`, but smaller:
 
 ## Task context
 
-Each task can include optional `context`: durable handoff instructions, rationale, constraints, decisions, and outcomes that should survive conversation compression. Keep titles short, descriptions actionable, and put the execution-critical details in `context` for non-trivial work.
+Each task can include optional `context`: durable handoff instructions, rationale, constraints, decisions, and definition of done that should survive conversation compression. Keep titles short, descriptions actionable, and put the execution-critical setup in `context` for non-trivial work.
 
-For pending tasks, write context up front with constraints, relevant findings, expected inputs, dependencies, and definition of done. As work progresses, update context with decisions and outcomes so archived tasks become a useful work log.
+For pending tasks, write context up front with constraints, relevant findings, expected inputs, dependencies, and definition of done. Treat context as durable setup, not a running journal or brainstorming scratchpad. Update it only when durable new information changes how the task should be done, or when the original context is wrong/incomplete; otherwise capture live progress in status changes, tool results, commits, or the final summary.
 
 Tiny process/meta instructions such as "compress context", "reply concisely", "run final check", or "summarize changes" should usually go into the relevant task's context or definition of done, not become standalone tasks, unless they are a real multi-step workflow phase.
 
@@ -102,7 +104,9 @@ Context is intentionally rendered selectively:
 
 ## Reminder behavior
 
-The extension publishes compact persistent task reminder intents to `pi-reminders` when active tasks exist. `pi-reminders` writes them as durable `<system-reminder>` history messages when task state changes and repeats them every 10 turns. The reminder leads with open-work counts, points to ready work, and keeps task hygiene visible without restating the full task-management policy. When all tasks are complete, it nudges verification and archival once tasks are ready to leave the active review surface. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+`task_manage` mutation results include a concise `Next:` guidance line derived from the resulting task state, so the agent gets immediate local direction without relying on a reminder.
+
+The extension publishes compact persistent task reminder intents to `pi-reminders` as fallback guidance for long chains of work. `pi-reminders` writes them as durable `<system-reminder>` history messages and repeats unchanged task reminders every 15 turns. After `task_manage` or `task_next`, the extension removes the cached task reminder and suppresses task reminder publishing for 5 turns because the tool result already gives the agent fresh task context. The reminder leads with open-work counts, shows how long the current active task has been running, points to ready work, and keeps task hygiene visible without restating the full task-management policy. When all tasks are complete, it nudges verification and archival once tasks are ready to leave the active review surface. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
 
 When all tasks are complete, the reminder nudges verification before finalization and archival. If completed tasks are ready for user review or no longer need to stay visible, archive them. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 

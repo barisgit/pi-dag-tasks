@@ -53,12 +53,12 @@ describe("DagTaskWidget", () => {
     expect(lines.join("\n")).not.toContain("#9 Ready 5");
   });
 
-  test("blocked rows use a distinct icon and dim blocked-by marker", () => {
+  test("blocked rows use a distinct icon and warning marker before dim blocked-by text", () => {
     const store = new DagTaskStore();
     const blocker = store.create({ title: "Blocker" }).task;
     store.create({ title: "Blocked task", blockedBy: [blocker.id] });
     const widget = new DagTaskWidget(store);
 
-    expect(render(widget)).toContain("  ◫ #2 Blocked task › blocked by #1");
+    expect(render(widget)).toContain("  ◫ #2 Blocked task ! blocked by #1");
   });
 });

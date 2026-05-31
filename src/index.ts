@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import {
   REMINDER_REMOVE_EVENT,
   REMINDER_UPSERT_EVENT,
@@ -13,7 +13,13 @@ import type { ReminderIntent, ReminderRemoveRequest } from "pi-reminders/src/typ
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { DagTaskStore, type TaskPatch } from "./store.js";
-import type { DagTask, DagTasksConfig, TaskStatus } from "./types.js";
+import type { DagTask, DagTasksConfig, TaskManageResultDetails, TaskNextResultDetails, TaskOperation, TaskStatus } from "./types.js";
+import {
+  renderTaskManageCall,
+  renderTaskManageResult,
+  renderTaskNextCall,
+  renderTaskNextResult,
+} from "./ui/tool-render.js";
 import { DagTaskWidget } from "./ui/widget.js";
 
 const TOOL_NAMES = new Set(["task_manage", "task_next"]);
@@ -23,6 +29,9 @@ const TASK_REMINDER_PRIORITY = 20;
 const DEBUG_LOG_PATH = join(homedir(), ".pi", "log", "dag-tasks.jsonl");
 const DEBUG_TEXT_PREVIEW_CHARS = 160;
 const AUTO_CLEAR_DELAY_TURNS = 4;
+const TASK_REMINDER_FORGOTTEN_TURNS = 15;
+const DEFAULT_TASK_REMINDER_FORGOTTEN_MS = 60_000;
+const TASK_REMINDER_TOOL_COOLDOWN_TURNS = 5;
 const VERIFICATION_TERMS = [
   "test", "tests", "tested", "testing",
   "verify", "verified", "verification",
@@ -38,7 +47,7 @@ const VERIFICATION_TERMS = [
   "qa",
 ];
 
-function textResult(text: string, details?: Record<string, unknown>) {
+function textResult<TDetails = unknown>(text: string, details?: TDetails) {
   return { content: [{ type: "text" as const, text }], details };
 }
 
@@ -70,7 +79,7 @@ const TaskUpdateSchema = Type.Object({
 });
 
 const TaskManageParams = Type.Object({
-  action: StringEnum(["create", "update", "complete", "archive", "purge", "list", "history"] as const),
+  action: StringEnum(["create", "update", "complete", "done_archive", "archive", "purge", "list", "history"] as const),
   create: Type.Optional(TaskCreateSchema),
   creates: Type.Optional(Type.Array(TaskCreateSchema)),
   update: Type.Optional(TaskUpdateSchema),
@@ -91,7 +100,7 @@ const TaskNextParams = Type.Object({
 });
 
 type TaskManageParamsType = {
-  action: "create" | "update" | "complete" | "archive" | "purge" | "list" | "history";
+  action: "create" | "update" | "complete" | "done_archive" | "archive" | "purge" | "list" | "history";
   create?: Omit<Parameters<DagTaskStore["create"]>[0], never>;
   creates?: Array<Omit<Parameters<DagTaskStore["create"]>[0], never>>;
   update?: TaskPatch;
@@ -113,6 +122,30 @@ function statusIcon(status: TaskStatus): string {
 
 function truncateText(text: string, max = 600): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  if (minutes < 60) return rem ? `${minutes}m ${rem}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
+}
+
+function formatReminderDuration(ms: number): string {
+  const minutes = Math.max(1, Math.floor(ms / 60_000));
+  if (minutes < 60) return `~${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return rem ? `~${hours}h ${rem}m` : `~${hours}h`;
+}
+
+function activeTaskLabel(task: DagTask, now = Date.now()): string {
+  const elapsed = task.startedAt ? ` (${formatReminderDuration(now - task.startedAt)})` : "";
+  return `#${task.id} ${task.title}${elapsed}`;
 }
 
 function normalizeVerificationText(text: string): string {
@@ -169,28 +202,87 @@ function summarizeHistory(records: ReturnType<DagTaskStore["history"]>, includeC
   })].join("\n");
 }
 
-function buildReminder(store: DagTaskStore): string | undefined {
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function taskStatePrefix(active: DagTask[], ready: DagTask[], blocked: DagTask[], completed: number): string {
+  return [
+    active.length ? countLabel(active.length, "active") : undefined,
+    ready.length ? countLabel(ready.length, "ready") : undefined,
+    blocked.length ? countLabel(blocked.length, "blocked") : undefined,
+    completed ? countLabel(completed, "done") : undefined,
+  ].filter(Boolean).join(", ");
+}
+
+function buildTaskManageGuidance(store: DagTaskStore): string {
+  const tasks = store.list();
+  if (tasks.length === 0) return "Next: no tasks remain.";
+
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const open = tasks.length - completed;
+  if (open === 0) return `${countLabel(completed, "task")} done. Next: verify if appropriate; archive completed tasks when ready.`;
+
+  const active = tasks.filter((task) => task.status === "in_progress");
+  const ready = store.ready();
+  const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
+  const prefix = taskStatePrefix(active, ready, blocked, completed);
+  const state = prefix ? `${prefix}. ` : "";
+
+  if (active.length > 0) {
+    const primary = active[0];
+    const readyText = ready.length ? ` Ready after that: #${ready[0].id}.` : "";
+    return `${state}Next: continue active #${primary.id} ${primary.title}.${readyText}`;
+  }
+
+  if (ready.length > 0) {
+    const primary = ready[0];
+    return `${state}Next: start ready #${primary.id} ${primary.title}.`;
+  }
+
+  const blockers = [...new Set(blocked.flatMap((task) => store.openBlockers(task)))];
+  return blockers.length
+    ? `${state}Next: all open tasks are blocked. Resolve blockers: ${blockers.map((id) => `#${id}`).join(", ")}.`
+    : `${state}Next: no ready tasks. Review task dependencies.`;
+}
+
+function reminderStateKey(store: DagTaskStore): string {
+  return JSON.stringify(store.list().map((task) => ({
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    activeForm: task.activeForm,
+    blockedBy: [...task.blockedBy].sort(),
+    blocks: [...task.blocks].sort(),
+  })));
+}
+
+function buildReminder(store: DagTaskStore, turnsSinceTaskTool: number): string | undefined {
   const tasks = store.list();
   if (tasks.length === 0) return undefined;
   const active = tasks.filter((task) => task.status === "in_progress");
   const ready = store.ready();
-  const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0).length;
+  const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
   const completed = tasks.filter((task) => task.status === "completed").length;
   const open = tasks.length - completed;
   if (open === 0) {
-    const parts = ["All tasks are completed. Before finalizing, verify if appropriate or state why verification was not run. If ready for user review, archive completed tasks."];
+    const parts = [`Task checkpoint: all tasks are completed after ${turnsSinceTaskTool} turns without task-tool use. Verify if appropriate; archive completed tasks when ready.`];
     if (shouldNudgeVerification(tasks)) parts.push("No verification task is recorded. Verify the work if practical, or state why verification was not run before finalizing.");
     return parts.join("\n");
   }
-  const parts = [
-    `Task state: ${open} open, ${active.length} active, ${ready.length} ready, ${blocked} blocked${completed ? `, ${completed} completed` : ""}.`,
-  ];
   if (active[0]) {
-    parts.push(`Active: #${active[0].id} ${active[0].title}`);
+    const parts = [`Task checkpoint: ${turnsSinceTaskTool} turns since task tools. Continue or complete active ${activeTaskLabel(active[0])}.`];
+    if (ready.length > 0) parts.push(`Ready after that: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}.`);
+    return parts.join("\n");
   }
-  if (ready.length > 0) parts.push(`Ready next: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}`);
-  parts.push("Keep statuses current; complete finished tasks promptly; archive reviewed tasks when they no longer need to stay visible; use task_next for ready work in ID order.");
-  return parts.join("\n");
+  if (ready.length > 0) {
+    return `Task checkpoint: no task is in progress after ${turnsSinceTaskTool} turns. Start ready #${ready[0].id} ${ready[0].title}.`;
+  }
+  if (blocked.length > 0) {
+    const blockers = [...new Set(blocked.flatMap((task) => store.openBlockers(task)))];
+    return `Task checkpoint: all open tasks are blocked after ${turnsSinceTaskTool} turns. Resolve blockers: ${blockers.map((id) => `#${id}`).join(", ")}.`;
+  }
+  return undefined;
 }
 
 function taskCounts(store: DagTaskStore): Record<string, number> {
@@ -248,14 +340,19 @@ function logReminderDecision(
   }
 }
 
+function taskReminderForgottenMs(): number {
+  const raw = process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS;
+  const parsed = raw === undefined ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_TASK_REMINDER_FORGOTTEN_MS;
+}
+
 function taskReminderIntent(text: string): ReminderIntent {
   return {
     source: TASK_REMINDER_SOURCE,
     id: TASK_REMINDER_ID,
     label: "Tasks",
     priority: TASK_REMINDER_PRIORITY,
-    ttl: "persistent",
-    repeatEveryTurns: 10,
+    ttl: "once",
     display: false,
     text,
   };
@@ -275,7 +372,11 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   const autoArchive = new AutoArchiveManager(() => store, () => cfg.autoArchiveCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY_TURNS);
   let currentTurn = 0;
   let storeReady = false;
-  let suppressNextReminder = false;
+  let suppressReminderUntilTurn = -1;
+  let lastTaskToolTurn = 0;
+  let lastTaskToolAt = Date.now();
+  let lastReminderStateKey: string | undefined;
+  let nextReminderTurn = TASK_REMINDER_FORGOTTEN_TURNS;
 
   function resolveCwd(ctx?: ExtensionContext): string {
     return ctx?.cwd ?? process.env.PWD ?? process.cwd();
@@ -315,6 +416,63 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     widget.update();
   }
 
+  function publishTaskReminder(action: string): void {
+    if (store.list().length === 0) {
+      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      lastReminderStateKey = undefined;
+      logReminderDecision(action, store);
+      return;
+    }
+
+    const turnsSinceTaskTool = currentTurn - lastTaskToolTurn;
+    const msSinceTaskTool = Date.now() - lastTaskToolAt;
+    const due = currentTurn >= nextReminderTurn && msSinceTaskTool >= taskReminderForgottenMs();
+    if (!due) {
+      logReminderDecision("skip-not-due", store, undefined, {
+        publishAction: action,
+        currentTurn,
+        nextReminderTurn,
+        turnsSinceTaskTool,
+        msSinceTaskTool,
+      });
+      return;
+    }
+
+    const reminder = buildReminder(store, turnsSinceTaskTool);
+    if (!reminder) {
+      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      lastReminderStateKey = undefined;
+      logReminderDecision(action, store);
+      return;
+    }
+
+    const stateKey = reminderStateKey(store);
+    if (stateKey === lastReminderStateKey && currentTurn < nextReminderTurn) {
+      logReminderDecision("skip-unchanged", store, undefined, { publishAction: action, currentTurn, nextReminderTurn });
+      return;
+    }
+
+    pi.events.emit(REMINDER_UPSERT_EVENT, taskReminderIntent(reminder));
+    lastReminderStateKey = stateKey;
+    nextReminderTurn = currentTurn + TASK_REMINDER_FORGOTTEN_TURNS;
+    logReminderDecision(action, store, reminder, { currentTurn, nextReminderTurn, turnsSinceTaskTool, msSinceTaskTool });
+  }
+
+  function suppressTaskReminder(action: string, toolName: string): void {
+    lastTaskToolTurn = currentTurn;
+    lastTaskToolAt = Date.now();
+    suppressReminderUntilTurn = Math.max(suppressReminderUntilTurn, currentTurn + TASK_REMINDER_TOOL_COOLDOWN_TURNS);
+    nextReminderTurn = Math.max(nextReminderTurn, currentTurn + TASK_REMINDER_FORGOTTEN_TURNS);
+    pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+    lastReminderStateKey = undefined;
+    logReminderDecision(action, store, undefined, {
+      toolName,
+      currentTurn,
+      suppressUntilTurn: suppressReminderUntilTurn,
+      nextReminderTurn,
+    });
+  }
+
   pi.on("session_start", (_event, ctx) => {
     storeReady = false;
     ensureStore(ctx);
@@ -326,19 +484,11 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.on("context", (_event, ctx) => {
     ensureStore(ctx);
     refreshUi(ctx);
-    if (suppressNextReminder) {
-      suppressNextReminder = false;
-      logReminderDecision("suppress-next-context", store);
+    if (currentTurn <= suppressReminderUntilTurn) {
+      logReminderDecision("suppress-cooldown", store, undefined, { currentTurn, suppressUntilTurn: suppressReminderUntilTurn });
       return undefined;
     }
-    const reminder = buildReminder(store);
-    if (!reminder) {
-      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
-      logReminderDecision("remove-empty", store);
-      return undefined;
-    }
-    pi.events.emit(REMINDER_UPSERT_EVENT, taskReminderIntent(reminder));
-    logReminderDecision("upsert", store, reminder);
+    publishTaskReminder("upsert");
     return undefined;
   });
 
@@ -349,11 +499,18 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     refreshUi(ctx);
   });
 
-  pi.on("tool_result", (event) => {
+  pi.on("tool_call", (event, ctx) => {
     if (TOOL_NAMES.has(event.toolName)) {
-      suppressNextReminder = true;
-      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
-      logReminderDecision("remove-tool-result", store, undefined, { toolName: event.toolName });
+      ensureStore(ctx);
+      suppressTaskReminder("suppress-before-tool-call", event.toolName);
+    }
+    return {};
+  });
+
+  pi.on("tool_result", (event, ctx) => {
+    if (TOOL_NAMES.has(event.toolName)) {
+      ensureStore(ctx);
+      suppressTaskReminder("suppress-after-tool-result", event.toolName);
     }
     return {};
   });
@@ -365,27 +522,33 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     promptSnippet: "Manage task list",
     promptGuidelines: [
       "This is Pi's single task/todo tracker. When tracking is appropriate, use task_manage instead of writing informal todo lists in prose.",
-      "Use proactively for 3+ distinct steps, non-trivial multi-action work, dependencies, ambiguity, checkpoints, multiple user requests, discovered follow-up work, or durable intent across turns/compression.",
-      "Skip task_manage for straightforward work, roughly the easiest 25%, single-step work, pure answers, or work under 3 trivial steps.",
-      "Size the task list to the active execution slice, not the whole roadmap. If a charter owns milestones or acceptance criteria, do not duplicate that plan in tasks.",
-      "Start with the smallest useful task list and expand it when exploration reveals real subwork, dependencies, or blockers; avoid both giant charter clones and artificial 6-8 task ranges.",
+      "Use tasks for durable state, not ceremony: multi-step implementation, ambiguity, checkpoints, dependencies, verification, multiple user requests, discovered follow-up work, or work likely to span turns/context.",
+      "Skip task_manage for trivial single-step edits, direct factual answers, or pure conversation.",
+      "Create the smallest useful task set for the current execution slice; do not clone a whole roadmap, charter plan, or speculative future work into tasks.",
+      "Right-size tasks as meaningful outcomes that can be started, blocked, completed, or verified; avoid both giant catch-all tasks and microscopic process tasks.",
       "Use action:'create' for both create and creates; there is no action:'creates'.",
       "Dependency fields blockedBy/blocks/addBlockedBy/addBlocks must contain task IDs like '1', not task titles; create first, then update dependencies if you need generated IDs.",
       "Use dependencies only when they change what can start next; blocked work is represented with blockedBy/blocks dependencies, not a separate blocked status.",
       "Normally keep one task in_progress per active worker. Multiple in_progress tasks are valid only for genuine parallel work or distinct owners/subagents.",
-      "When creating tasks, add context up front: constraints, relevant findings, expected inputs, and definition of done for the current execution slice; update context as decisions/outcomes emerge.",
+      "Task context is durable setup, not a running journal. Add it up front with constraints, relevant findings, expected inputs, and definition of done; update it only when durable new information changes how the task should be done or the original context is wrong/incomplete.",
       "Keep tasks outcome-oriented and verifiable, not microscopic. For tests, builds, lint, typecheck, manual review, or output inspection tasks, set metadata.kind = 'verification'.",
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
       "Complete tasks as soon as their work is fully done; avoid batching status updates at the end.",
       "Only mark completed work that is actually finished; if verification is appropriate, complete after running it or record why it was skipped.",
+      "Use action:'done_archive' when a finished task can be marked complete and archived in one operation; use separate complete/archive only when review should remain visible first.",
       "Archive completed tasks once they are ready to leave the active review surface.",
       "Use task_next for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
     ],
     parameters: TaskManageParams,
+    renderShell: "self",
     async execute(_toolCallId, params: TaskManageParamsType, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
       const lines: string[] = [];
-      const details: Record<string, unknown> = { action: params.action };
+      const operations: TaskOperation[] = [];
+      const details: TaskManageResultDetails = { action: params.action, operations };
+      const blockedBefore = new Set(store.list()
+        .filter((task) => task.status === "pending" && store.openBlockers(task).length > 0)
+        .map((task) => task.id));
 
       if (params.action === "create") {
         const inputs = [...(params.creates ?? []), ...(params.create ? [params.create] : [])];
@@ -394,6 +557,8 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
           const { task, warnings } = store.create(input);
           if (task.status === "in_progress") widget.markActive(task.id, true);
           if (task.status === "completed") autoArchive.trackCompletion(task.id, currentTurn);
+          const kind = task.status === "in_progress" ? "started" : task.status === "completed" ? "completed" : "created";
+          operations.push({ kind, id: task.id, title: task.title, warnings });
           lines.push(`Created #${task.id}: ${task.title}${task.status !== "pending" ? ` [${task.status}]` : ""}${warnings.length ? ` (warning: ${warnings.join("; ")})` : ""}`);
         }
         autoArchive.resetBatchCountdown();
@@ -410,6 +575,12 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
           }
           if (patch.status === "pending") widget.markActive(patch.id, false);
           if (before?.status === "completed" && patch.status !== "completed") autoArchive.resetBatchCountdown();
+          if (result.task) {
+            const kind = patch.status === "in_progress" ? "started" : patch.status === "completed" ? "completed" : "updated";
+            operations.push({ kind, id: result.task.id, title: result.task.title, changed: result.changed, warnings: result.warnings });
+          } else {
+            operations.push({ kind: "skipped", id: patch.id, warnings: result.warnings });
+          }
           lines.push(result.task ? `Updated #${patch.id}: ${result.changed.join(", ") || "no fields"}${result.warnings.length ? ` (warning: ${result.warnings.join("; ")})` : ""}` : `Skipped #${patch.id}: ${result.warnings.join("; ")}`);
         }
       } else if (params.action === "complete") {
@@ -419,18 +590,56 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
           const result = store.update({ id, status: "completed" });
           widget.markActive(id, false);
           if (result.task) autoArchive.trackCompletion(id, currentTurn);
+          operations.push(result.task ? { kind: "completed", id, title: result.task.title, changed: ["status"] } : { kind: "skipped", id, warnings: ["not found"] });
           lines.push(result.task ? `Completed #${id}` : `Skipped #${id}: not found`);
+        }
+      } else if (params.action === "done_archive") {
+        const ids = params.ids ?? (params.id ? [params.id] : []);
+        if (ids.length === 0) throw new Error("id or ids is required");
+        for (const id of ids) {
+          const result = store.update({ id, status: "completed" });
+          widget.markActive(id, false);
+          if (result.task) {
+            autoArchive.trackCompletion(id, currentTurn);
+            const title = result.task.title;
+            store.archive([id]);
+            operations.push({ kind: "done_archived", id, title, changed: ["status"] });
+            lines.push(`Completed and archived #${id}`);
+          } else {
+            operations.push({ kind: "skipped", id, warnings: ["not found"] });
+            lines.push(`Skipped #${id}: not found`);
+          }
         }
       } else if (params.action === "archive") {
         const ids = params.ids ?? (params.id ? [params.id] : []);
-        const count = ids.length > 0 ? store.archive(ids) : store.archiveCompleted();
-        for (const id of ids) widget.markActive(id, false);
-        lines.push(`Archived ${count} task(s)`);
+        if (ids.length > 0) {
+          const before = new Map(ids.map((id) => [id, store.get(id)]));
+          const count = store.archive(ids);
+          for (const id of ids) {
+            widget.markActive(id, false);
+            const task = before.get(id);
+            operations.push(task ? { kind: "archived", id, title: task.title } : { kind: "skipped", id, warnings: ["not found"] });
+          }
+          lines.push(`Archived ${count} task(s)`);
+        } else {
+          const completed = store.list().filter((task) => task.status === "completed");
+          const count = store.archiveCompleted();
+          for (const task of completed) {
+            widget.markActive(task.id, false);
+            operations.push({ kind: "archived", id: task.id, title: task.title });
+          }
+          lines.push(`Archived ${count} task(s)`);
+        }
       } else if (params.action === "purge") {
         const ids = params.ids ?? (params.id ? [params.id] : []);
         if (ids.length === 0) throw new Error("id or ids is required");
+        const before = new Map(ids.map((id) => [id, store.get(id)]));
         const count = store.purge(ids);
-        for (const id of ids) widget.markActive(id, false);
+        for (const id of ids) {
+          widget.markActive(id, false);
+          const task = before.get(id);
+          operations.push(task ? { kind: "purged", id, title: task.title } : { kind: "skipped", id, warnings: ["not found"] });
+        }
         lines.push(`Purged ${count}/${ids.length} task(s)`);
       } else if (params.action === "list") {
         lines.push(summarizeTasks(store, store.list(), params.includeCompleted ?? true, params.includeContext ?? false));
@@ -440,11 +649,29 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
         details.history = history;
       }
 
+      const tasksAfter = store.list();
+      if (!["list", "history"].includes(params.action)) {
+        for (const task of tasksAfter) {
+          if (blockedBefore.has(task.id) && task.status === "pending" && store.openBlockers(task).length === 0) {
+            operations.push({ kind: "unblocked", id: task.id, title: task.title });
+            lines.push(`Unblocked #${task.id}: ${task.title}`);
+          }
+        }
+      }
+
+      if (!["list", "history"].includes(params.action)) {
+        const guidance = buildTaskManageGuidance(store);
+        details.guidance = guidance;
+        lines.push("", guidance);
+      }
+
       store.deleteFileIfEmpty();
       refreshUi(ctx);
-      details.tasks = store.list();
+      details.tasks = tasksAfter;
       return textResult(lines.join("\n"), details);
     },
+    renderCall: renderTaskManageCall,
+    renderResult: renderTaskManageResult,
   });
 
   pi.registerTool({
@@ -454,6 +681,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     promptSnippet: "Next ready tasks",
     promptGuidelines: ["Use after completing work or when resuming; prefer ready tasks in ID order and don't start blocked tasks."],
     parameters: TaskNextParams,
+    renderShell: "self",
     async execute(_toolCallId, params: { limit?: number; includeBlocked?: boolean; includeCompleted?: boolean }, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
       const limit = params.limit ?? 5;
@@ -466,8 +694,11 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       if (active.length) lines.push(`Active:\n${summarizeTasks(store, active, true, true)}`);
       lines.push(ready.length ? `Ready:\n${summarizeTasks(store, ready, true, true)}` : "Ready: none");
       if (params.includeBlocked ?? true) lines.push(blocked.length ? `Blocked:\n${summarizeTasks(store, blocked, true)}` : "Blocked: none");
-      return textResult(lines.join("\n\n"), { ready, active, blocked, completedCount: completed.length });
+      const details: TaskNextResultDetails = { ready, active, blocked, completedCount: completed.length, totalCount: tasks.length };
+      return textResult(lines.join("\n\n"), details);
     },
+    renderCall: renderTaskNextCall,
+    renderResult: renderTaskNextResult,
   });
 
   pi.registerCommand("tasks", {
