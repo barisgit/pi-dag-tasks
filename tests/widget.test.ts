@@ -7,8 +7,13 @@ const theme = {
   strikethrough: (text: string) => text,
 };
 
-function render(widget: DagTaskWidget, columns = 120): string[] {
-  return (widget as any).render({ terminal: { columns } }, theme);
+const colorTheme = {
+  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  strikethrough: (text: string) => `~${text}~`,
+};
+
+function render(widget: DagTaskWidget, columns = 120, themeOverride = theme): string[] {
+  return (widget as any).render({ terminal: { columns } }, themeOverride);
 }
 
 describe("DagTaskWidget", () => {
@@ -19,6 +24,14 @@ describe("DagTaskWidget", () => {
     const widget = new DagTaskWidget(store);
 
     expect(render(widget)[0]).toBe(" Tasks · 1/2 done · 1 active");
+  });
+
+  test("renders completed task text dim while keeping the checkmark successful", () => {
+    const store = new DagTaskStore();
+    store.create({ title: "Done", status: "completed" });
+    const widget = new DagTaskWidget(store);
+
+    expect(render(widget, 120, colorTheme)).toContain("  <success>✔</success> <dim>~#1 Done~</dim>");
   });
 
   test("compact mode keeps recent completed rows in place and summarizes omitted open rows", () => {

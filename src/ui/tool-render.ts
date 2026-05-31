@@ -77,7 +77,7 @@ function renderTaskLine(task: DagTask, allTasks: DagTask[], theme: Theme): strin
   const id = theme.fg("dim", `#${task.id}`);
   const dependency = renderDependencyHint(task, allTasks, theme);
 
-  if (task.status === "completed") return `${ROW_INDENT}${icon} ${theme.fg("success", theme.strikethrough(`#${task.id} ${task.title}`))}`;
+  if (task.status === "completed") return `${ROW_INDENT}${icon} ${theme.fg("dim", theme.strikethrough(`#${task.id} ${task.title}`))}`;
   if (task.status === "in_progress") return `${ROW_INDENT}${icon} ${id} ${theme.fg("accent", task.activeForm || task.title)}${dependency}`;
   if (blockers.length) return `${ROW_INDENT}${icon} ${id} ${theme.fg("dim", task.title)}${dependency}`;
   return `${ROW_INDENT}${icon} ${id} ${theme.fg("muted", task.title)}${dependency}`;

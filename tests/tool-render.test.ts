@@ -7,6 +7,11 @@ const theme = {
   strikethrough: (text: string) => text,
 };
 
+const colorTheme = {
+  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  strikethrough: (text: string) => `~${text}~`,
+};
+
 function textOf(component: { render(width: number): string[] }): string {
   return component.render(120).map((line) => line.trimEnd()).join("\n");
 }
@@ -27,6 +32,19 @@ function task(id: string, title: string, status: DagTask["status"], patch: Parti
 }
 
 describe("task tool renderers", () => {
+  test("renders completed task text dim while keeping the checkmark successful", () => {
+    const rendered = renderTaskManageResult({
+      content: [{ type: "text", text: "" }],
+      details: {
+        action: "list",
+        operations: [],
+        tasks: [task("1", "Done", "completed")],
+      },
+    }, {}, colorTheme as any);
+
+    expect(textOf(rendered)).toBe(" <accent>●</accent> <accent>Tasks · 1/1 done</accent>\n  <success>✔</success> <dim>~#1 Done~</dim>");
+  });
+
   test("renders task_manage affected tasks as a human event log", () => {
     const result = {
       content: [{ type: "text", text: "Created #1: Research" }],
