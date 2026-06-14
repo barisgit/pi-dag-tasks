@@ -8,8 +8,9 @@ import { Type } from "typebox";
 import {
   REMINDER_REMOVE_EVENT,
   REMINDER_UPSERT_EVENT,
-} from "pi-reminders/src/types.js";
-import type { ReminderIntent, ReminderRemoveRequest } from "pi-reminders/src/types.js";
+  type ReminderIntent,
+  type ReminderRemoveRequest,
+} from "pi-extension-utils";
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { DagTaskStore, type TaskPatch } from "./store.js";

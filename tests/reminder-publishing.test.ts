@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   REMINDER_REMOVE_EVENT,
   REMINDER_UPSERT_EVENT,
-} from "pi-reminders/src/types.js";
+} from "pi-extension-utils";
 import dagTasksExtension from "../src/index.ts";
 
 interface EmittedEvent {
