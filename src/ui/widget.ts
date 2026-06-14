@@ -1,4 +1,5 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import type { UtilsClient } from "pi-extension-utils";
 import type { DagTaskStore } from "../store.js";
 import type { DagTasksConfig } from "../types.js";
 
@@ -7,11 +8,14 @@ interface ThemeLike {
   strikethrough(text: string): string;
 }
 
-interface UiLike {
+interface WidgetHost {
   setStatus(key: string, text: string | undefined): void;
-  setWidget(key: string, content: undefined | ((tui: any, theme: ThemeLike) => { render(): string[]; invalidate(): void }), options?: { placement?: "aboveEditor" | "belowEditor" }): void;
+  widgets: UtilsClient["widgets"];
 }
 
+const WIDGET_KEY = "dag-tasks";
+const WIDGET_PLACEMENT = "aboveEditor";
+const WIDGET_ORDER = 20;
 const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
 const MAX_BODY_ROWS = 8;
 const COMPACT_COMPLETED_ROWS = 2;
@@ -35,56 +39,72 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
 }
 
 export class DagTaskWidget {
-  private ui?: UiLike;
+  private host?: WidgetHost;
   private frame = 0;
   private interval?: ReturnType<typeof setInterval>;
-  private tui?: { terminal?: { columns?: number }; requestRender?: () => void };
+  private tui?: TUI;
   private registered = false;
 
   constructor(private store: DagTaskStore, private config: () => DagTasksConfig = () => ({})) {}
 
   setStore(store: DagTaskStore): void { this.store = store; }
-  setUi(ui: UiLike): void { this.ui = ui; }
+  setHost(host: WidgetHost): void { this.host = host; }
 
   markActive(_id: string, _active: boolean): void {
     this.update();
   }
 
   update(): void {
-    if (!this.ui) return;
+    if (!this.host) return;
     const tasks = this.store.list();
     const open = tasks.filter((task) => task.status !== "completed").length;
     const inProgress = tasks.filter((task) => task.status === "in_progress").length;
-    this.ui.setStatus("dag-tasks", tasks.length ? `tasks ${tasks.length}/${open} open${inProgress ? ` · ${inProgress} active` : ""}` : undefined);
+    this.host.setStatus(WIDGET_KEY, tasks.length ? `tasks ${tasks.length}/${open} open${inProgress ? ` · ${inProgress} active` : ""}` : undefined);
 
     if (tasks.length === 0) {
-      if (this.registered) this.ui.setWidget("dag-tasks", undefined);
-      this.registered = false;
+      if (this.registered) {
+        this.host.widgets.remove(WIDGET_PLACEMENT, WIDGET_KEY);
+        this.registered = false;
+      }
       this.stopTimer();
       return;
+    }
+
+    // Register the factory once; the host stores the component and calls
+    // render(width) on each render cycle, so live state is read via `this`.
+    if (!this.registered) {
+      this.host.widgets.set(
+        WIDGET_PLACEMENT,
+        WIDGET_KEY,
+        (tui, theme) => {
+          this.tui = tui;
+          const themeLike = theme as ThemeLike;
+          return {
+            render: (width: number) => this.render(width, themeLike),
+            invalidate: () => {},
+          };
+        },
+        { order: WIDGET_ORDER },
+      );
+      this.registered = true;
     }
 
     if (tasks.some((task) => task.status === "in_progress")) this.ensureTimer();
     else this.stopTimer();
     this.frame++;
-
-    this.ui.setWidget("dag-tasks", (tui, theme) => {
-      this.tui = tui;
-      return { render: () => this.render(tui, theme), invalidate: () => {} };
-    }, { placement: "aboveEditor" });
-    this.registered = true;
-    this.tui?.requestRender?.();
+    this.tui?.requestRender();
   }
 
   dispose(): void {
     this.stopTimer();
-    this.ui?.setWidget("dag-tasks", undefined);
-    this.ui?.setStatus("dag-tasks", undefined);
-    this.registered = false;
+    if (this.registered) {
+      this.host?.widgets.remove(WIDGET_PLACEMENT, WIDGET_KEY);
+      this.registered = false;
+    }
+    this.host?.setStatus(WIDGET_KEY, undefined);
   }
 
-  private render(tui: { terminal?: { columns?: number } }, theme: ThemeLike): string[] {
-    const width = tui.terminal?.columns ?? 100;
+  private render(width: number, theme: ThemeLike): string[] {
     const truncate = (line: string) => truncateToWidth(line, width);
     const tasks = this.store.list();
     if (tasks.length === 0) return [];

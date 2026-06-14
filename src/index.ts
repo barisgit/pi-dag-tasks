@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-  REMINDER_REMOVE_EVENT,
-  REMINDER_UPSERT_EVENT,
+  connect,
+  createLogger,
+  type Logger,
   type ReminderIntent,
-  type ReminderRemoveRequest,
+  type UtilsClient,
 } from "pi-extension-utils";
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
@@ -27,7 +26,6 @@ const TOOL_NAMES = new Set(["task_manage", "task_next"]);
 const TASK_REMINDER_SOURCE = "pi-dag-tasks";
 const TASK_REMINDER_ID = "state";
 const TASK_REMINDER_PRIORITY = 20;
-const DEBUG_LOG_PATH = join(homedir(), ".pi", "log", "dag-tasks.jsonl");
 const DEBUG_TEXT_PREVIEW_CHARS = 160;
 const AUTO_CLEAR_DELAY_TURNS = 4;
 const TASK_REMINDER_FORGOTTEN_TURNS = 15;
@@ -314,28 +312,25 @@ function textPreview(text: string): string {
 }
 
 function logReminderDecision(
+  logger: Logger,
   action: string,
   store: DagTaskStore,
   text?: string,
   extra: Record<string, unknown> = {},
 ): void {
   try {
-    const record: Record<string, unknown> = {
-      timestamp: new Date().toISOString(),
+    const fields: Record<string, unknown> = {
       event: "task_reminder_decision",
       action,
       taskCounts: taskCounts(store),
       ...extra,
     };
     if (text !== undefined) {
-      record.textChars = text.length;
-      record.textHash = textHash(text);
-      record.textPreview = textPreview(text);
+      fields.textChars = text.length;
+      fields.textHash = textHash(text);
+      fields.textPreview = textPreview(text);
     }
-
-    const path = process.env.PI_DAG_TASKS_DEBUG_LOG || DEBUG_LOG_PATH;
-    mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+    logger.log("info", action, fields);
   } catch {
     // Debug logging is best-effort and must not affect task handling.
   }
@@ -359,16 +354,11 @@ function taskReminderIntent(text: string): ReminderIntent {
   };
 }
 
-function taskReminderRemoveRequest(): ReminderRemoveRequest {
-  return {
-    source: TASK_REMINDER_SOURCE,
-    id: TASK_REMINDER_ID,
-  };
-}
-
 export default function dagTasksExtension(pi: ExtensionAPI): void {
   const cfg: DagTasksConfig = {};
   let store = new DagTaskStore();
+  const logger = createLogger("pi-dag-tasks", process.env.PI_DAG_TASKS_DEBUG_LOG ? { dir: process.env.PI_DAG_TASKS_DEBUG_LOG } : {});
+  let utilsClient: UtilsClient | undefined;
   const widget = new DagTaskWidget(store, () => cfg);
   const autoArchive = new AutoArchiveManager(() => store, () => cfg.autoArchiveCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY_TURNS);
   let currentTurn = 0;
@@ -412,16 +402,25 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     widget.setStore(store);
   }
 
+  function ensureUtilsClient(ctx: ExtensionContext): UtilsClient {
+    if (!utilsClient) utilsClient = connect(pi, { ctx, clientId: "pi-dag-tasks" });
+    return utilsClient;
+  }
+
   function refreshUi(ctx?: ExtensionContext): void {
-    if (ctx?.hasUI) widget.setUi(ctx.ui as any);
+    if (ctx?.hasUI) {
+      const client = ensureUtilsClient(ctx);
+      widget.setHost({ setStatus: (key, text) => ctx.ui.setStatus(key, text), widgets: client.widgets });
+    }
     widget.update();
   }
 
   function publishTaskReminder(action: string): void {
+    const reminders = utilsClient?.reminders;
     if (store.list().length === 0) {
-      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      reminders?.remove(TASK_REMINDER_SOURCE, TASK_REMINDER_ID);
       lastReminderStateKey = undefined;
-      logReminderDecision(action, store);
+      logReminderDecision(logger, action, store);
       return;
     }
 
@@ -429,7 +428,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     const msSinceTaskTool = Date.now() - lastTaskToolAt;
     const due = currentTurn >= nextReminderTurn && msSinceTaskTool >= taskReminderForgottenMs();
     if (!due) {
-      logReminderDecision("skip-not-due", store, undefined, {
+      logReminderDecision(logger, "skip-not-due", store, undefined, {
         publishAction: action,
         currentTurn,
         nextReminderTurn,
@@ -441,22 +440,22 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
 
     const reminder = buildReminder(store, turnsSinceTaskTool);
     if (!reminder) {
-      pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+      reminders?.remove(TASK_REMINDER_SOURCE, TASK_REMINDER_ID);
       lastReminderStateKey = undefined;
-      logReminderDecision(action, store);
+      logReminderDecision(logger, action, store);
       return;
     }
 
     const stateKey = reminderStateKey(store);
     if (stateKey === lastReminderStateKey && currentTurn < nextReminderTurn) {
-      logReminderDecision("skip-unchanged", store, undefined, { publishAction: action, currentTurn, nextReminderTurn });
+      logReminderDecision(logger, "skip-unchanged", store, undefined, { publishAction: action, currentTurn, nextReminderTurn });
       return;
     }
 
-    pi.events.emit(REMINDER_UPSERT_EVENT, taskReminderIntent(reminder));
+    reminders?.upsert(taskReminderIntent(reminder));
     lastReminderStateKey = stateKey;
     nextReminderTurn = currentTurn + TASK_REMINDER_FORGOTTEN_TURNS;
-    logReminderDecision(action, store, reminder, { currentTurn, nextReminderTurn, turnsSinceTaskTool, msSinceTaskTool });
+    logReminderDecision(logger, action, store, reminder, { currentTurn, nextReminderTurn, turnsSinceTaskTool, msSinceTaskTool });
   }
 
   function suppressTaskReminder(action: string, toolName: string): void {
@@ -464,9 +463,9 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
     lastTaskToolAt = Date.now();
     suppressReminderUntilTurn = Math.max(suppressReminderUntilTurn, currentTurn + TASK_REMINDER_TOOL_COOLDOWN_TURNS);
     nextReminderTurn = Math.max(nextReminderTurn, currentTurn + TASK_REMINDER_FORGOTTEN_TURNS);
-    pi.events.emit(REMINDER_REMOVE_EVENT, taskReminderRemoveRequest());
+    utilsClient?.reminders.remove(TASK_REMINDER_SOURCE, TASK_REMINDER_ID);
     lastReminderStateKey = undefined;
-    logReminderDecision(action, store, undefined, {
+    logReminderDecision(logger, action, store, undefined, {
       toolName,
       currentTurn,
       suppressUntilTurn: suppressReminderUntilTurn,
@@ -477,16 +476,21 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     storeReady = false;
     ensureStore(ctx);
+    ensureUtilsClient(ctx);
     refreshUi(ctx);
   });
 
-  pi.on("session_shutdown", () => widget.dispose());
+  pi.on("session_shutdown", () => {
+    widget.dispose();
+    utilsClient?.dispose();
+  });
 
   pi.on("context", (_event, ctx) => {
     ensureStore(ctx);
+    ensureUtilsClient(ctx);
     refreshUi(ctx);
     if (currentTurn <= suppressReminderUntilTurn) {
-      logReminderDecision("suppress-cooldown", store, undefined, { currentTurn, suppressUntilTurn: suppressReminderUntilTurn });
+      logReminderDecision(logger, "suppress-cooldown", store, undefined, { currentTurn, suppressUntilTurn: suppressReminderUntilTurn });
       return undefined;
     }
     publishTaskReminder("upsert");
@@ -496,13 +500,18 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.on("turn_start", (_event, ctx) => {
     currentTurn++;
     ensureStore(ctx);
-    if (autoArchive.onTurnStart(currentTurn)) store.deleteFileIfEmpty();
+    ensureUtilsClient(ctx);
+    if (autoArchive.onTurnStart(currentTurn)) {
+      logger.info("auto_archive", { archived: "completed-batch" });
+      store.deleteFileIfEmpty();
+    }
     refreshUi(ctx);
   });
 
   pi.on("tool_call", (event, ctx) => {
     if (TOOL_NAMES.has(event.toolName)) {
       ensureStore(ctx);
+      ensureUtilsClient(ctx);
       suppressTaskReminder("suppress-before-tool-call", event.toolName);
     }
     return {};
@@ -511,6 +520,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.on("tool_result", (event, ctx) => {
     if (TOOL_NAMES.has(event.toolName)) {
       ensureStore(ctx);
+      ensureUtilsClient(ctx);
       suppressTaskReminder("suppress-after-tool-result", event.toolName);
     }
     return {};
@@ -661,6 +671,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       }
 
       if (!["list", "history"].includes(params.action)) {
+        logger.info("task_manage", { action: params.action, ops: operations.map((op) => op.kind) });
         const guidance = buildTaskManageGuidance(store);
         details.guidance = guidance;
         lines.push("", guidance);

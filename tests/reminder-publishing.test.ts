@@ -16,8 +16,8 @@ interface EmittedEvent {
 async function withDebugLog<T>(fn: (path: string) => Promise<T> | T): Promise<T> {
   const previous = process.env.PI_DAG_TASKS_DEBUG_LOG;
   const dir = mkdtempSync(join(tmpdir(), "pi-dag-tasks-debug-"));
-  const path = join(dir, "dag-tasks.jsonl");
-  process.env.PI_DAG_TASKS_DEBUG_LOG = path;
+  const path = join(dir, "pi-dag-tasks.jsonl");
+  process.env.PI_DAG_TASKS_DEBUG_LOG = dir;
   try {
     return await fn(path);
   } finally {
@@ -32,7 +32,15 @@ function readDebugRecords(path: string): any[] {
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line));
+    .flatMap((line) => {
+      const start = line.indexOf("{");
+      if (start === -1) return [];
+      try {
+        return [JSON.parse(line.slice(start))];
+      } catch {
+        return [];
+      }
+    });
 }
 
 function createMockPi() {
@@ -45,6 +53,7 @@ function createMockPi() {
       emit(name: string, payload: any) {
         emitted.push({ name, payload });
       },
+      on() {},
     },
     on(name: string, handler: Function) {
       handlers.set(name, handler);
@@ -267,7 +276,7 @@ describe("task reminder publishing", () => {
         handlers.get("tool_result")?.({ toolName: "task_manage" }, ctx);
         handlers.get("context")?.({ messages: [] }, ctx);
 
-        const records = readDebugRecords(debugLogPath);
+        const records = readDebugRecords(debugLogPath).filter((r) => r.event === "task_reminder_decision");
         expect(records.map((record) => record.action)).toEqual([
           "upsert",
           "suppress-before-tool-call",

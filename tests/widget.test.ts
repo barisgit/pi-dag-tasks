@@ -13,7 +13,7 @@ const colorTheme = {
 };
 
 function render(widget: DagTaskWidget, columns = 120, themeOverride = theme): string[] {
-  return (widget as any).render({ terminal: { columns } }, themeOverride);
+  return (widget as any).render(columns, themeOverride);
 }
 
 describe("DagTaskWidget", () => {
