@@ -10,15 +10,22 @@ Use tasks for durable state, not ceremony. Create the smallest useful task set f
 
 Only two LLM-callable tools are exposed:
 
-- `task_manage` — Pi's single task/todo tracker for batch CRUD/status/dependency/archive/history operations
-  - actions: `create`, `update`, `complete`, `done_archive`, `archive`, `purge`, `list`, `history`
-  - use `action: "create"` for both single `create` and batch `creates`; there is no `action: "creates"`
-  - supports batch fields: `creates`, `updates`, `ids`
-  - dependency fields: `blockedBy`, `blocks`, `addBlockedBy`, `addBlocks`, `removeBlockedBy`, `removeBlocks`; values must be task IDs like `"1"`, not task titles
+- `task` — all mutations. Batch-only inputs; each action reads exactly one field.
+  - actions: `create`, `update`, `archive`, `archive_all`, `purge`
+  - `create` → `creates: [{ title, status?, blockedBy?, blocks?, context?, owner?, metadata? }]`
+  - `update` → `updates: [{ id, status?, title?, context?, activeForm?, owner?, metadata?, addBlockedBy?, addBlocks?, removeBlockedBy?, removeBlockedBy? }]` — `id` is required in every entry
+  - `archive` / `purge` → `ids: ["1", "2"]`
+  - `archive_all` → no arguments (archives every completed task)
+  - completing a task is `update` with `status: "completed"`; there is no separate `complete` action
+  - dependency fields: `blockedBy`/`blocks` (on create) and `addBlockedBy`/`addBlocks`/`removeBlockedBy`/`removeBlocks` (on update); values must be task IDs like `"1"`, not titles
   - `context` field preserves durable setup across compression; write it up front and update it only when durable new information changes how the task should be done or the original context is wrong/incomplete
   - for tests, builds, lint, typecheck, manual review, or output inspection tasks, prefer `metadata.kind: "verification"`
   - create accepts initial `status`, so one call can create multiple tasks with one or more already `in_progress`
-- `task_next` — compact summary plus ready/unblocked tasks, including context for active/ready tasks
+- `task_query` — all reads, selected by `scope`
+  - scopes: `ready` (unblocked pending + active tasks, plus a summary), `active` (the current list, including completed unless `includeCompleted: false`), `history` (archived tasks, newest first)
+  - optional: `limit`, `query`, `includeCompleted` (default `true`), `includeContext` (default `false`)
+
+There are no singular `create`/`update` fields and no top-level `id`; pass a single item as a one-element array.
 
 Example create-and-start in one call. The second task can use `blockedBy: ["1"]` because IDs are assigned sequentially within the batch:
 
@@ -32,29 +39,32 @@ Example create-and-start in one call. The second task can use `blockedBy: ["1"]`
 }
 ```
 
-Example batch completion:
+Example batch update (also how you complete tasks):
 
 ```json
 {
-  "action": "complete",
-  "ids": ["1", "2", "3", "4", "5"]
+  "action": "update",
+  "updates": [
+    { "id": "1", "status": "in_progress" },
+    { "id": "2", "status": "completed" }
+  ]
 }
 ```
 
-Example archive and history lookup:
+Example archive all completed tasks, then look them up:
 
 ```json
-{ "action": "archive", "archive": "completed" }
+{ "action": "archive_all" }
 ```
 
 ```json
-{ "action": "history", "limit": 20, "query": "verification" }
+{ "scope": "history", "query": "verification" }
 ```
 
 History is compact by default. Add `"includeContext": true` when you want archived task context:
 
 ```json
-{ "action": "history", "limit": 20, "includeContext": true }
+{ "scope": "history", "includeContext": true }
 ```
 
 Use `purge` only for true destructive removal from the active DAG. Completed work should usually be archived, not purged; archive once it is ready to leave the active review surface.
@@ -99,14 +109,14 @@ Tiny process/meta instructions such as "compress context", "reply concisely", "r
 Context is intentionally rendered selectively:
 
 - ephemeral reminders include context for the active task only
-- `task_next` includes context for active and ready tasks
+- `task_query` (scope `ready` or `active`) includes context for active and ready tasks
 - the persistent widget stays compact and does not show full context
 
 ## Reminder behavior
 
-`task_manage` mutation results include a concise `Next:` guidance line derived from the resulting task state, so the agent gets immediate local direction without relying on a reminder.
+`task` mutation results include a concise `Next:` guidance line derived from the resulting task state, so the agent gets immediate local direction without relying on a reminder.
 
-The extension publishes compact persistent task reminder intents via `pi-extension-utils` reminder events as fallback guidance for long chains of work. The reminder utilities write them as durable `<system-reminder>` history messages and repeat unchanged task reminders every 15 turns. After `task_manage` or `task_next`, the extension removes the cached task reminder and suppresses task reminder publishing for 5 turns because the tool result already gives the agent fresh task context. The reminder leads with open-work counts, shows how long the current active task has been running, points to ready work, and keeps task hygiene visible without restating the full task-management policy. When all tasks are complete, it nudges verification and archival once tasks are ready to leave the active review surface. It does not include the full DAG or archive history. Use `task_next`, `task_manage({"action":"list"})`, or `task_manage({"action":"history"})` for details.
+The extension publishes compact persistent task reminder intents via `pi-extension-utils` reminder events as fallback guidance for long chains of work. The reminder utilities write them as durable `<system-reminder>` history messages and repeat unchanged task reminders every 15 turns. After `task` or `task_query`, the extension removes the cached task reminder and suppresses task reminder publishing for 5 turns because the tool result already gives the agent fresh task context. The reminder leads with open-work counts, shows how long the current active task has been running, points to ready work, and keeps task hygiene visible without restating the full task-management policy. When all tasks are complete, it nudges verification and archival once tasks are ready to leave the active review surface. It does not include the full DAG or archive history. Use `task_query` with `scope:"ready"`, `scope:"active"`, or `scope:"history"` for details.
 
 When all tasks are complete, the reminder nudges verification before finalization and archival. If completed tasks are ready for user review or no longer need to stay visible, archive them. If there are 3+ completed tasks and no verification signal is recorded, it adds a deterministic nudge. The strongest signal is `metadata.kind: "verification"`; the fallback scans task title, description, context, active form, and metadata JSON for terms such as test, verify, check, review, lint, typecheck, build, compile, validate, smoke test, manual test, and qa.
 
@@ -122,7 +132,7 @@ Storage modes:
 
 Widget animation is disabled by default. Set `animateActiveTasks: true` in the config file to animate in-progress task icons; static in-progress tasks still show elapsed time from the persisted `startedAt` timestamp.
 
-Archived tasks are appended to `.pi/dag-tasks/archive.jsonl` and are available through `task_manage` with `action: "history"`. History is shown newest-first with archive time and reason (`manual archive` or `completed sweep`). Archived context is hidden by default; pass `includeContext: true` for detailed history.
+Archived tasks are appended to `.pi/dag-tasks/archive.jsonl` and are available through `task_query` with `scope: "history"`. History is shown newest-first with archive time and reason (`manual archive` or `completed sweep`). Archived context is hidden by default; pass `includeContext: true` for detailed history.
 
 Override with `PI_DAG_TASKS`:
 

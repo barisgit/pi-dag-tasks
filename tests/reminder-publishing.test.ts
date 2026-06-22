@@ -99,11 +99,11 @@ function advanceTurns(handlers: Map<string, Function>, ctx: any, turns: number):
 }
 
 async function createTask(tools: Map<string, any>, ctx: any, title = "Ship reminders", context?: string) {
-  const tool = tools.get("task_manage");
+  const tool = tools.get("task");
   expect(tool).toBeTruthy();
   await tool.execute(
     "tool-call-1",
-    { action: "create", create: { title, status: "in_progress", context } },
+    { action: "create", creates: [{ title, status: "in_progress", context }] },
     new AbortController().signal,
     () => {},
     ctx,
@@ -197,7 +197,7 @@ describe("task reminder publishing", () => {
       expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT).length).toBeGreaterThanOrEqual(1);
       emitted.length = 0;
 
-      handlers.get("tool_call")?.({ toolName: "task_manage" }, ctx);
+      handlers.get("tool_call")?.({ toolName: "task" }, ctx);
       expect(reminderEvents(emitted, REMINDER_REMOVE_EVENT)).toEqual([
         {
           name: REMINDER_REMOVE_EVENT,
@@ -219,20 +219,23 @@ describe("task reminder publishing", () => {
     });
   });
 
-  test("done_archive completes and archives selected tasks in one operation", async () => {
+  test("complete via update then archive_all clears the list in one sweep", async () => {
     await withMemoryTasks(async () => {
-      const { tools } = createMockPi();
+      const { tools, handlers } = createMockPi();
       const ctx = createContext();
-      const tool = tools.get("task_manage");
+      const tool = tools.get("task");
+      const query = tools.get("task_query");
 
-      const created = await tool.execute("tool-call-1", { action: "create", create: { title: "Ship it", status: "in_progress" } }, new AbortController().signal, () => {}, ctx);
+      const created = await tool.execute("tool-call-1", { action: "create", creates: [{ title: "Ship it", status: "in_progress" }] }, new AbortController().signal, () => {}, ctx);
       expect(created.content[0].text).toContain("1 active. Next: continue active #1 Ship it.");
       const id = created.details.operations[0].id;
-      const result = await tool.execute("tool-call-2", { action: "done_archive", id }, new AbortController().signal, () => {}, ctx);
-      const list = await tool.execute("tool-call-3", { action: "list" }, new AbortController().signal, () => {}, ctx);
-      expect(result.content[0].text).toContain("Next: no tasks remain.");
-      expect(result.details.operations).toEqual([{ kind: "done_archived", id, title: "Ship it", changed: ["status"] }]);
+      const completed = await tool.execute("tool-call-2", { action: "update", updates: [{ id, status: "completed" }] }, new AbortController().signal, () => {}, ctx);
+      expect(completed.content[0].text).toContain("Next: verify if appropriate; archive completed tasks when ready.");
+      const archived = await tool.execute("tool-call-3", { action: "archive_all" }, new AbortController().signal, () => {}, ctx);
+      expect(archived.content[0].text).toContain("Next: no tasks remain.");
+      const list = await query.execute("tool-call-4", { scope: "active" }, new AbortController().signal, () => {}, ctx);
       expect(list.content[0].text).toBe("No tasks");
+      expect(handlers).toBeDefined();
     });
   });
 
@@ -240,10 +243,10 @@ describe("task reminder publishing", () => {
     await withMemoryTasks(async () => {
       const { tools, emitted } = createMockPi();
       const ctx = createContext();
-      const tool = tools.get("task_manage");
+      const tool = tools.get("task");
 
-      await tool.execute("tool-call-1", { action: "create", create: { title: "Done", status: "completed" } }, new AbortController().signal, () => {}, ctx);
-      await tool.execute("tool-call-2", { action: "create", create: { title: "New active", status: "in_progress" } }, new AbortController().signal, () => {}, ctx);
+      await tool.execute("tool-call-1", { action: "create", creates: [{ title: "Done", status: "completed" }] }, new AbortController().signal, () => {}, ctx);
+      await tool.execute("tool-call-2", { action: "create", creates: [{ title: "New active", status: "in_progress" }] }, new AbortController().signal, () => {}, ctx);
       expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
     });
   });
@@ -272,8 +275,8 @@ describe("task reminder publishing", () => {
 
         advanceTurns(handlers, ctx, 15);
         handlers.get("context")?.({ messages: [] }, ctx);
-        handlers.get("tool_call")?.({ toolName: "task_manage" }, ctx);
-        handlers.get("tool_result")?.({ toolName: "task_manage" }, ctx);
+        handlers.get("tool_call")?.({ toolName: "task" }, ctx);
+        handlers.get("tool_result")?.({ toolName: "task" }, ctx);
         handlers.get("context")?.({ messages: [] }, ctx);
 
         const records = readDebugRecords(debugLogPath).filter((r) => r.event === "task_reminder_decision");

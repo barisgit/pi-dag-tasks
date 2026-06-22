@@ -1,6 +1,6 @@
 import { Spacer, Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { DagTask, TaskManageResultDetails, TaskNextResultDetails, TaskOperation, TaskOperationKind } from "../types.js";
+import type { ArchivedDagTask, DagTask, TaskResultDetails, TaskQueryResultDetails, TaskOperation, TaskOperationKind } from "../types.js";
 
 interface RenderResultLike {
   content?: Array<{ type?: string; text?: string }>;
@@ -88,7 +88,7 @@ function operationIcon(kind: TaskOperationKind, theme: Theme): string {
   if (kind === "purged") return theme.fg("error", "−");
   if (kind === "archived") return theme.fg("dim", "◌");
   if (kind === "started") return theme.fg("accent", "◼");
-  if (kind === "completed" || kind === "done_archived") return theme.fg("success", "✔");
+  if (kind === "completed") return theme.fg("success", "✔");
   if (kind === "unblocked") return theme.fg("success", "◻");
   return theme.fg("muted", "◻");
 }
@@ -98,7 +98,6 @@ function operationVerb(kind: TaskOperationKind): string {
     case "created": return "Added";
     case "started": return "Started";
     case "completed": return "Done";
-    case "done_archived": return "Done archived";
     case "updated": return "Updated";
     case "unblocked": return "Unblocked";
     case "archived": return "Archived";
@@ -107,16 +106,13 @@ function operationVerb(kind: TaskOperationKind): string {
   }
 }
 
-function manageHeader(action: TaskManageResultDetails["action"]): string {
+function manageHeader(action: TaskResultDetails["action"]): string {
   switch (action) {
     case "create": return "Tasks added";
     case "update": return "Tasks updated";
-    case "complete": return "Tasks completed";
-    case "done_archive": return "Tasks done archived";
     case "archive": return "Tasks archived";
+    case "archive_all": return "Tasks archived";
     case "purge": return "Tasks removed";
-    case "history": return "Task history";
-    case "list": return "Tasks";
     default: return "Tasks updated";
   }
 }
@@ -145,17 +141,16 @@ function renderTaskSnapshot(tasks: DagTask[], theme: Theme, limit = 20): string[
   return lines;
 }
 
-export function renderTaskManageCall(_args: { action?: string }, _theme: Theme) {
+export function renderTaskCall(_args: { action?: string }, _theme: Theme) {
   return new Spacer(0);
 }
 
-export function renderTaskManageResult(result: RenderResultLike, { expanded }: { expanded?: boolean }, theme: Theme) {
-  const details = result.details as TaskManageResultDetails | undefined;
+export function renderTaskResult(result: RenderResultLike, { expanded }: { expanded?: boolean }, theme: Theme) {
+  const details = result.details as TaskResultDetails | undefined;
   const operations = details?.operations ?? [];
 
   if (!operations.length) {
-    if (details?.action === "list" && details.tasks) return new Text(renderTaskSnapshot(details.tasks, theme, expanded ? 100 : 20).join("\n"), 0, 0);
-    return new Text(renderFallbackResult(result, "task_manage", theme), 0, 0);
+    return new Text(renderFallbackResult(result, "task", theme), 0, 0);
   }
 
   const allTasks = details?.tasks ?? [];
@@ -177,21 +172,42 @@ export function renderTaskManageResult(result: RenderResultLike, { expanded }: {
   return new Text(lines.join("\n"), 0, 0);
 }
 
-export function renderTaskNextCall(_args: { limit?: number }, _theme: Theme) {
+export function renderTaskQueryCall(_args: { scope?: string }, _theme: Theme) {
   return new Spacer(0);
 }
 
-export function renderTaskNextResult(result: RenderResultLike, { expanded }: { expanded?: boolean }, theme: Theme) {
-  const details = result.details as TaskNextResultDetails | undefined;
-  if (!details) return new Text(renderFallbackResult(result, "task_next", theme), 0, 0);
+function renderArchiveSnapshot(records: ArchivedDagTask[], theme: Theme): string[] {
+  const lines = [`${toolMarker(theme)}${theme.fg("toolTitle", "Task history")}${theme.fg("dim", ` · ${records.length} archived`)}`];
+  for (const record of records.slice(0, 100)) {
+    lines.push(`${ROW_INDENT}${theme.fg("dim", "◌")} ${theme.fg("dim", `#${record.task.id} ${record.task.title}`)}`);
+  }
+  return lines;
+}
 
+export function renderTaskQueryResult(result: RenderResultLike, { expanded }: { expanded?: boolean }, theme: Theme) {
+  const details = result.details as TaskQueryResultDetails | undefined;
+  if (!details) return new Text(renderFallbackResult(result, "task_query", theme), 0, 0);
+
+  if (details.scope === "history") {
+    const history = details.history ?? [];
+    if (!history.length) return new Text(renderFallbackResult(result, "task_query", theme), 0, 0);
+    return new Text(renderArchiveSnapshot(history, theme).join("\n"), 0, 0);
+  }
+
+  if (details.scope === "active") {
+    const tasks = details.tasks ?? [];
+    return new Text(renderTaskSnapshot(tasks, theme, expanded ? 100 : 20).join("\n"), 0, 0);
+  }
+
+  // scope "ready"
   const ready = details.ready ?? [];
   const active = details.active ?? [];
   const blocked = details.blocked ?? [];
   const visible = [...active, ...ready, ...(expanded || blocked.length ? blocked : [])];
   const allTasks = visible;
-  const total = details.totalCount ?? details.completedCount + active.length + ready.length + blocked.length;
-  const lines = [`${toolMarker(theme)}${theme.fg("toolTitle", "Next tasks")}${theme.fg("dim", ` · ${details.completedCount}/${total} done${active.length ? ` · ${active.length} active` : ""}`)}`];
+  const completedCount = details.completedCount ?? 0;
+  const total = details.totalCount ?? completedCount + active.length + ready.length + blocked.length;
+  const lines = [`${toolMarker(theme)}${theme.fg("toolTitle", "Next tasks")}${theme.fg("dim", ` · ${completedCount}/${total} done${active.length ? ` · ${active.length} active` : ""}`)}`];
 
   if (visible.length) {
     for (const task of visible) lines.push(renderTaskLine(task, allTasks, theme));

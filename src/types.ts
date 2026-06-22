@@ -1,10 +1,15 @@
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
+/** Actions accepted by the `task` mutation tool. */
+export type TaskMutationAction = "create" | "update" | "archive" | "archive_all" | "purge";
+
+/** Read scopes accepted by the `task_query` tool. */
+export type TaskQueryScope = "ready" | "active" | "history";
+
 export type TaskOperationKind =
   | "created"
   | "started"
   | "completed"
-  | "done_archived"
   | "updated"
   | "unblocked"
   | "archived"
@@ -43,20 +48,24 @@ export interface StoreData {
   tasks: DagTask[];
 }
 
-export interface TaskManageResultDetails {
-  action?: TaskManageAction;
+/** Result details for the `task` mutation tool. */
+export interface TaskResultDetails {
+  action?: TaskMutationAction;
   operations: TaskOperation[];
   tasks?: DagTask[];
-  history?: ArchivedDagTask[];
   guidance?: string;
 }
 
-export interface TaskNextResultDetails {
-  ready: DagTask[];
-  active: DagTask[];
-  blocked: DagTask[];
-  completedCount: number;
-  totalCount: number;
+/** Result details for the `task_query` read tool. Fields vary by `scope`. */
+export interface TaskQueryResultDetails {
+  scope: TaskQueryScope;
+  ready?: DagTask[];        // scope "ready": unblocked pending tasks
+  active?: DagTask[];       // scope "ready": in_progress tasks
+  blocked?: DagTask[];      // scope "ready": pending tasks with open blockers
+  tasks?: DagTask[];        // scope "active": the current (non-archived) list
+  history?: ArchivedDagTask[]; // scope "history": archived tasks, newest first
+  completedCount?: number;
+  totalCount?: number;
 }
 
 export interface ArchivedDagTask {
@@ -70,5 +79,3 @@ export interface DagTasksConfig {
   autoArchiveCompleted?: "never" | "on_list_complete" | "on_task_complete";
   animateActiveTasks?: boolean;
 }
-
-export type TaskManageAction = "create" | "update" | "complete" | "done_archive" | "archive" | "purge" | "list" | "history";

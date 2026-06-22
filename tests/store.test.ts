@@ -44,4 +44,65 @@ describe("DagTaskStore", () => {
     expect(reset?.startedAt).toBeUndefined();
     expect(reset?.completedAt).toBeUndefined();
   });
+
+  test("archiveCompleted archives every completed task (archive_all backing)", () => {
+    const store = new DagTaskStore();
+    store.create({ title: "Open", status: "pending" });
+    store.create({ title: "Done A", status: "completed" });
+    store.create({ title: "Done B", status: "completed" });
+
+    const count = store.archiveCompleted();
+
+    expect(count).toBe(2);
+    // Only completed tasks are swept; the open one remains.
+    expect(store.list().map((t) => t.title)).toEqual(["Open"]);
+  });
+
+  test("archiveCompleted records archived tasks to history when file-backed", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-dag-tasks-archive-"));
+    try {
+      const taskFile = join(root, "tasks.json");
+      const store = new DagTaskStore(taskFile);
+      store.create({ title: "Done A", status: "completed" });
+      store.create({ title: "Done B", status: "completed" });
+
+      store.archiveCompleted();
+
+      // Archived tasks are newest-first in history.
+      expect(store.history(100).map((r) => r.task.title)).toEqual(["Done B", "Done A"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("update add/remove dependency edges by id", () => {
+    const store = new DagTaskStore();
+    store.create({ title: "A" });
+    store.create({ title: "B" });
+
+    const added = store.update({ id: "2", addBlockedBy: ["1"] }).task;
+    expect(added?.blockedBy).toEqual(["1"]);
+    expect(store.get("1")?.blocks).toEqual(["2"]);
+    expect(store.openBlockers(added!)).toEqual(["1"]);
+
+    const removed = store.update({ id: "2", removeBlockedBy: ["1"] }).task;
+    expect(removed?.blockedBy).toEqual([]);
+    expect(store.openBlockers(removed!)).toEqual([]);
+  });
+
+  test("update on a missing id reports not found, not a thrown error", () => {
+    const store = new DagTaskStore();
+    const result = store.update({ id: "99", status: "in_progress" });
+    expect(result.task).toBeUndefined();
+    expect(result.warnings).toEqual(["#99 not found"]);
+  });
+
+  test("ready() returns unblocked pending tasks", () => {
+    const store = new DagTaskStore();
+    store.create({ title: "Free" });
+    store.create({ title: "Blocked", blockedBy: ["1"] });
+    store.create({ title: "Active", status: "in_progress" });
+
+    expect(store.ready().map((t) => t.title)).toEqual(["Free"]);
+  });
 });

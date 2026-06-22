@@ -13,16 +13,16 @@ import {
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { DagTaskStore, type TaskPatch } from "./store.js";
-import type { DagTask, DagTasksConfig, TaskManageResultDetails, TaskNextResultDetails, TaskOperation, TaskStatus } from "./types.js";
+import type { DagTask, DagTasksConfig, TaskQueryResultDetails, TaskMutationAction, TaskResultDetails, TaskOperation, TaskStatus } from "./types.js";
 import {
-  renderTaskManageCall,
-  renderTaskManageResult,
-  renderTaskNextCall,
-  renderTaskNextResult,
+  renderTaskCall,
+  renderTaskQueryCall,
+  renderTaskResult,
+  renderTaskQueryResult,
 } from "./ui/tool-render.js";
 import { DagTaskWidget } from "./ui/widget.js";
 
-const TOOL_NAMES = new Set(["task_manage", "task_next"]);
+const TOOL_NAMES = new Set(["task", "task_query"]);
 const TASK_REMINDER_SOURCE = "pi-dag-tasks";
 const TASK_REMINDER_ID = "state";
 const TASK_REMINDER_PRIORITY = 20;
@@ -77,36 +77,30 @@ const TaskUpdateSchema = Type.Object({
   removeBlockedBy: Type.Optional(Type.Array(Type.String())),
 });
 
-const TaskManageParams = Type.Object({
-  action: StringEnum(["create", "update", "complete", "done_archive", "archive", "purge", "list", "history"] as const),
-  create: Type.Optional(TaskCreateSchema),
+const TaskParams = Type.Object({
+  action: StringEnum(["create", "update", "archive", "archive_all", "purge"] as const),
   creates: Type.Optional(Type.Array(TaskCreateSchema)),
-  update: Type.Optional(TaskUpdateSchema),
   updates: Type.Optional(Type.Array(TaskUpdateSchema)),
-  id: Type.Optional(Type.String()),
   ids: Type.Optional(Type.Array(Type.String())),
-  archive: Type.Optional(StringEnum(["completed"] as const)),
+}, { additionalProperties: false });
+
+const TaskQueryParams = Type.Object({
+  scope: StringEnum(["ready", "active", "history"] as const),
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
   query: Type.Optional(Type.String()),
   includeCompleted: Type.Optional(Type.Boolean({ default: true })),
   includeContext: Type.Optional(Type.Boolean({ default: false })),
-});
+}, { additionalProperties: false });
 
-const TaskNextParams = Type.Object({
-  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
-  includeBlocked: Type.Optional(Type.Boolean({ default: true })),
-  includeCompleted: Type.Optional(Type.Boolean({ default: true })),
-});
-
-type TaskManageParamsType = {
-  action: "create" | "update" | "complete" | "done_archive" | "archive" | "purge" | "list" | "history";
-  create?: Omit<Parameters<DagTaskStore["create"]>[0], never>;
+type TaskParamsType = {
+  action: "create" | "update" | "archive" | "archive_all" | "purge";
   creates?: Array<Omit<Parameters<DagTaskStore["create"]>[0], never>>;
-  update?: TaskPatch;
   updates?: TaskPatch[];
-  id?: string;
   ids?: string[];
-  archive?: "completed";
+};
+
+type TaskQueryParamsType = {
+  scope: "ready" | "active" | "history";
   limit?: number;
   query?: string;
   includeCompleted?: boolean;
@@ -527,18 +521,19 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "task_manage",
-    label: "Task Manage",
-    description: "Manage Pi's task list: the durable todo/progress tracker for non-trivial work. Create/update it early, keep statuses current, and archive completed tasks when ready. Use action:'create' for single or batch creation via create/creates; dependencies use task IDs like '1', not titles.",
+    name: "task",
+    label: "Task",
+    description: "Manage Pi's task list (mutations): the durable todo/progress tracker for non-trivial work. Actions: create, update, archive, archive_all, purge. Batch-only — create reads creates[], update reads updates[], archive/purge read ids[], archive_all takes no args. To complete a task, update with status:'completed'. Dependencies use task IDs like '1', not titles.",
     promptSnippet: "Manage task list",
     promptGuidelines: [
-      "This is Pi's single task/todo tracker. When tracking is appropriate, use task_manage instead of writing informal todo lists in prose.",
+      "This is Pi's single task/todo tracker (mutations). When tracking is appropriate, use task instead of writing informal todo lists in prose.",
       "Use tasks for durable state, not ceremony: multi-step implementation, ambiguity, checkpoints, dependencies, verification, multiple user requests, discovered follow-up work, or work likely to span turns/context.",
-      "Skip task_manage for trivial single-step edits, direct factual answers, or pure conversation.",
+      "Skip task for trivial single-step edits, direct factual answers, or pure conversation.",
       "Create the smallest useful task set for the current execution slice; do not clone a whole roadmap, charter plan, or speculative future work into tasks.",
       "Right-size tasks as meaningful outcomes that can be started, blocked, completed, or verified; avoid both giant catch-all tasks and microscopic process tasks.",
-      "Use action:'create' for both create and creates; there is no action:'creates'.",
-      "Dependency fields blockedBy/blocks/addBlockedBy/addBlocks must contain task IDs like '1', not task titles; create first, then update dependencies if you need generated IDs.",
+      "Inputs are batch-only: action:'create' takes creates[], action:'update' takes updates[] (each entry must include an id), action:'archive'/'purge' take ids[], action:'archive_all' takes no arguments. There are no singular create/update fields and no top-level id.",
+      "To complete a task, use action:'update' with status:'completed' on that task's id; there is no separate complete action.",
+      "Dependency fields blockedBy/blocks (on create) and addBlockedBy/addBlocks/removeBlockedBy/removeBlocks (on update) must contain task IDs like '1', not task titles; create first, then update dependencies if you need generated IDs.",
       "Use dependencies only when they change what can start next; blocked work is represented with blockedBy/blocks dependencies, not a separate blocked status.",
       "Normally keep one task in_progress per active worker. Multiple in_progress tasks are valid only for genuine parallel work or distinct owners/subagents.",
       "Task context is durable setup, not a running journal. Add it up front with constraints, relevant findings, expected inputs, and definition of done; update it only when durable new information changes how the task should be done or the original context is wrong/incomplete.",
@@ -546,24 +541,23 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
       "Complete tasks as soon as their work is fully done; avoid batching status updates at the end.",
       "Only mark completed work that is actually finished; if verification is appropriate, complete after running it or record why it was skipped.",
-      "Use action:'done_archive' when a finished task can be marked complete and archived in one operation; use separate complete/archive only when review should remain visible first.",
-      "Archive completed tasks once they are ready to leave the active review surface.",
-      "Use task_next for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
+      "Use action:'archive_all' to sweep all completed tasks in one operation, or action:'archive' with ids[] to archive specific tasks once they are ready to leave the active review surface.",
+      "Use task_query with scope:'ready' for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
     ],
-    parameters: TaskManageParams,
+    parameters: TaskParams,
     renderShell: "self",
-    async execute(_toolCallId, params: TaskManageParamsType, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: TaskParamsType, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
       const lines: string[] = [];
       const operations: TaskOperation[] = [];
-      const details: TaskManageResultDetails = { action: params.action, operations };
+      const details: TaskResultDetails = { action: params.action, operations };
       const blockedBefore = new Set(store.list()
         .filter((task) => task.status === "pending" && store.openBlockers(task).length > 0)
         .map((task) => task.id));
 
       if (params.action === "create") {
-        const inputs = [...(params.creates ?? []), ...(params.create ? [params.create] : [])];
-        if (inputs.length === 0) throw new Error("create or creates is required");
+        const inputs = params.creates ?? [];
+        if (inputs.length === 0) throw new Error("creates is required");
         for (const input of inputs) {
           const { task, warnings } = store.create(input);
           if (task.status === "in_progress") widget.markActive(task.id, true);
@@ -574,8 +568,8 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
         }
         autoArchive.resetBatchCountdown();
       } else if (params.action === "update") {
-        const updates = [...(params.updates ?? []), ...(params.update ? [params.update] : [])];
-        if (updates.length === 0) throw new Error("update or updates is required");
+        const updates = params.updates ?? [];
+        if (updates.length === 0) throw new Error("updates is required");
         for (const patch of updates) {
           const before = store.get(patch.id);
           const result = store.update(patch);
@@ -594,56 +588,28 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
           }
           lines.push(result.task ? `Updated #${patch.id}: ${result.changed.join(", ") || "no fields"}${result.warnings.length ? ` (warning: ${result.warnings.join("; ")})` : ""}` : `Skipped #${patch.id}: ${result.warnings.join("; ")}`);
         }
-      } else if (params.action === "complete") {
-        const ids = params.ids ?? (params.id ? [params.id] : []);
-        if (ids.length === 0) throw new Error("id or ids is required");
-        for (const id of ids) {
-          const result = store.update({ id, status: "completed" });
-          widget.markActive(id, false);
-          if (result.task) autoArchive.trackCompletion(id, currentTurn);
-          operations.push(result.task ? { kind: "completed", id, title: result.task.title, changed: ["status"] } : { kind: "skipped", id, warnings: ["not found"] });
-          lines.push(result.task ? `Completed #${id}` : `Skipped #${id}: not found`);
-        }
-      } else if (params.action === "done_archive") {
-        const ids = params.ids ?? (params.id ? [params.id] : []);
-        if (ids.length === 0) throw new Error("id or ids is required");
-        for (const id of ids) {
-          const result = store.update({ id, status: "completed" });
-          widget.markActive(id, false);
-          if (result.task) {
-            autoArchive.trackCompletion(id, currentTurn);
-            const title = result.task.title;
-            store.archive([id]);
-            operations.push({ kind: "done_archived", id, title, changed: ["status"] });
-            lines.push(`Completed and archived #${id}`);
-          } else {
-            operations.push({ kind: "skipped", id, warnings: ["not found"] });
-            lines.push(`Skipped #${id}: not found`);
-          }
-        }
       } else if (params.action === "archive") {
-        const ids = params.ids ?? (params.id ? [params.id] : []);
-        if (ids.length > 0) {
-          const before = new Map(ids.map((id) => [id, store.get(id)]));
-          const count = store.archive(ids);
-          for (const id of ids) {
-            widget.markActive(id, false);
-            const task = before.get(id);
-            operations.push(task ? { kind: "archived", id, title: task.title } : { kind: "skipped", id, warnings: ["not found"] });
-          }
-          lines.push(`Archived ${count} task(s)`);
-        } else {
-          const completed = store.list().filter((task) => task.status === "completed");
-          const count = store.archiveCompleted();
-          for (const task of completed) {
-            widget.markActive(task.id, false);
-            operations.push({ kind: "archived", id: task.id, title: task.title });
-          }
-          lines.push(`Archived ${count} task(s)`);
+        const ids = params.ids ?? [];
+        if (ids.length === 0) throw new Error("ids is required");
+        const before = new Map(ids.map((id) => [id, store.get(id)]));
+        const count = store.archive(ids);
+        for (const id of ids) {
+          widget.markActive(id, false);
+          const task = before.get(id);
+          operations.push(task ? { kind: "archived", id, title: task.title } : { kind: "skipped", id, warnings: ["not found"] });
         }
+        lines.push(`Archived ${count}/${ids.length} task(s)`);
+      } else if (params.action === "archive_all") {
+        const completed = store.list().filter((task) => task.status === "completed");
+        const count = store.archiveCompleted();
+        for (const task of completed) {
+          widget.markActive(task.id, false);
+          operations.push({ kind: "archived", id: task.id, title: task.title });
+        }
+        lines.push(`Archived ${count} task(s)`);
       } else if (params.action === "purge") {
-        const ids = params.ids ?? (params.id ? [params.id] : []);
-        if (ids.length === 0) throw new Error("id or ids is required");
+        const ids = params.ids ?? [];
+        if (ids.length === 0) throw new Error("ids is required");
         const before = new Map(ids.map((id) => [id, store.get(id)]));
         const count = store.purge(ids);
         for (const id of ids) {
@@ -652,65 +618,79 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
           operations.push(task ? { kind: "purged", id, title: task.title } : { kind: "skipped", id, warnings: ["not found"] });
         }
         lines.push(`Purged ${count}/${ids.length} task(s)`);
-      } else if (params.action === "list") {
-        lines.push(summarizeTasks(store, store.list(), params.includeCompleted ?? true, params.includeContext ?? false));
-      } else if (params.action === "history") {
-        const history = store.history(params.limit ?? 20, params.query);
-        lines.push(summarizeHistory(history, params.includeContext ?? false));
-        details.history = history;
       }
 
       const tasksAfter = store.list();
-      if (!["list", "history"].includes(params.action)) {
-        for (const task of tasksAfter) {
-          if (blockedBefore.has(task.id) && task.status === "pending" && store.openBlockers(task).length === 0) {
-            operations.push({ kind: "unblocked", id: task.id, title: task.title });
-            lines.push(`Unblocked #${task.id}: ${task.title}`);
-          }
+      for (const task of tasksAfter) {
+        if (blockedBefore.has(task.id) && task.status === "pending" && store.openBlockers(task).length === 0) {
+          operations.push({ kind: "unblocked", id: task.id, title: task.title });
+          lines.push(`Unblocked #${task.id}: ${task.title}`);
         }
       }
 
-      if (!["list", "history"].includes(params.action)) {
-        logger.info("task_manage", { action: params.action, ops: operations.map((op) => op.kind) });
-        const guidance = buildTaskManageGuidance(store);
-        details.guidance = guidance;
-        lines.push("", guidance);
-      }
+      logger.info("task", { action: params.action, ops: operations.map((op) => op.kind) });
+      const guidance = buildTaskManageGuidance(store);
+      details.guidance = guidance;
+      lines.push("", guidance);
 
       store.deleteFileIfEmpty();
       refreshUi(ctx);
       details.tasks = tasksAfter;
       return textResult(lines.join("\n"), details);
     },
-    renderCall: renderTaskManageCall,
-    renderResult: renderTaskManageResult,
+    renderCall: renderTaskCall,
+    renderResult: renderTaskResult,
   });
 
   pi.registerTool({
-    name: "task_next",
-    label: "Task Next",
-    description: "Return ready/unblocked tasks from Pi's task list and a compact summary.",
-    promptSnippet: "Next ready tasks",
-    promptGuidelines: ["Use after completing work or when resuming; prefer ready tasks in ID order and don't start blocked tasks."],
-    parameters: TaskNextParams,
+    name: "task_query",
+    label: "Task Query",
+    description: "Read Pi's task list. scope:'ready' returns unblocked pending + active tasks plus a summary; scope:'active' returns the current list; scope:'history' returns archived tasks newest-first. Optional: limit, query, includeCompleted (default true), includeContext (default false).",
+    promptSnippet: "Query task list",
+    promptGuidelines: [
+      "Use task_query to orient on the task list without mutating it: scope:'ready' for ready/unblocked work, scope:'active' for the current list, scope:'history' for archived work.",
+      "Prefer ready tasks in ID order and don't start blocked tasks.",
+      "Use after completing work or when resuming; set includeContext:true when you need durable task setup.",
+    ],
+    parameters: TaskQueryParams,
     renderShell: "self",
-    async execute(_toolCallId, params: { limit?: number; includeBlocked?: boolean; includeCompleted?: boolean }, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: TaskQueryParamsType, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
-      const limit = params.limit ?? 5;
-      const tasks = store.list();
-      const ready = store.ready().slice(0, limit);
-      const active = tasks.filter((task) => task.status === "in_progress");
-      const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
-      const completed = tasks.filter((task) => task.status === "completed");
-      const lines = [`Summary: ${tasks.length} total, ${ready.length} ready, ${active.length} active, ${blocked.length} blocked, ${completed.length} completed.`];
-      if (active.length) lines.push(`Active:\n${summarizeTasks(store, active, true, true)}`);
-      lines.push(ready.length ? `Ready:\n${summarizeTasks(store, ready, true, true)}` : "Ready: none");
-      if (params.includeBlocked ?? true) lines.push(blocked.length ? `Blocked:\n${summarizeTasks(store, blocked, true)}` : "Blocked: none");
-      const details: TaskNextResultDetails = { ready, active, blocked, completedCount: completed.length, totalCount: tasks.length };
-      return textResult(lines.join("\n\n"), details);
+      const includeCompleted = params.includeCompleted ?? true;
+      const includeContext = params.includeContext ?? false;
+
+      if (params.scope === "ready") {
+        const limit = params.limit ?? 5;
+        const tasks = store.list();
+        const allReady = store.ready();
+        const ready = allReady.slice(0, limit);
+        const active = tasks.filter((task) => task.status === "in_progress");
+        const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
+        const completed = tasks.filter((task) => task.status === "completed");
+        const lines = [`Summary: ${tasks.length} total, ${allReady.length} ready, ${active.length} active, ${blocked.length} blocked, ${completed.length} completed.`];
+        if (active.length) lines.push(`Active:\n${summarizeTasks(store, active, true, includeContext)}`);
+        lines.push(ready.length ? `Ready:\n${summarizeTasks(store, ready, true, includeContext)}` : "Ready: none");
+        lines.push(blocked.length ? `Blocked:\n${summarizeTasks(store, blocked, true)}` : "Blocked: none");
+        const details: TaskQueryResultDetails = { scope: "ready", ready, active, blocked, completedCount: completed.length, totalCount: tasks.length };
+        return textResult(lines.join("\n\n"), details);
+      }
+
+      if (params.scope === "active") {
+        const tasks = store.list();
+        const visible = includeCompleted ? tasks : tasks.filter((task) => task.status !== "completed");
+        const lines = [summarizeTasks(store, visible, includeCompleted, includeContext)];
+        const details: TaskQueryResultDetails = { scope: "active", tasks: visible };
+        return textResult(lines.join("\n"), details);
+      }
+
+      // scope "history"
+      const history = store.history(params.limit ?? 20, params.query);
+      const lines = [summarizeHistory(history, includeContext)];
+      const details: TaskQueryResultDetails = { scope: "history", history };
+      return textResult(lines.join("\n"), details);
     },
-    renderCall: renderTaskNextCall,
-    renderResult: renderTaskNextResult,
+    renderCall: renderTaskQueryCall,
+    renderResult: renderTaskQueryResult,
   });
 
   pi.registerCommand("tasks", {
