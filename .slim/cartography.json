@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "last_run": "2026-06-22T22:12:00.575255Z",
+    "root": "/Users/blaz/Programming_local/Projects/pi-extensions/pi-dag-tasks",
+    "include_patterns": [
+      "src/**/*.ts"
+    ],
+    "exclude_patterns": [
+      "**/*.test.ts",
+      "tests/**",
+      "dist/**",
+      "node_modules/**",
+      "docs/**",
+      "*.md"
+    ],
+    "exceptions": []
+  },
+  "file_hashes": {
+    "src/auto-clear.ts": "e50cbdb14b64d6306f097da69ea98a6c",
+    "src/config.ts": "c11bd2882ed84278caa84bfe62b0e8a1",
+    "src/index.ts": "1cbc6ce93c67fb6fcf729fa4719f0f8c",
+    "src/store.ts": "a469e85d7467d10b12cc639e5b50530b",
+    "src/types.ts": "9c90cb9f43b4e63168e7769eb3eb1cba",
+    "src/ui/tool-render.ts": "74546ffed6ab8fd63dd1da99d27a5569",
+    "src/ui/widget.ts": "3201aa3531dd41391c9f5c4a4720e107"
+  },
+  "folder_hashes": {
+    "src": "cf453166443b5759e9a8f75010c2b10a",
+    ".": "",
+    "src/ui": "c964bf86cc554d09e3760f0772e9f0fd"
+  }
+}
