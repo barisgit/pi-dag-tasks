@@ -2,20 +2,20 @@
 
 Presentation layer for the **pi-dag-tasks** extension. Two distinct concerns sharing no runtime state:
 1. **Tool renderers** (`tool-render.ts`) — format `task` (mutation) and `task_query` (read) tool calls and results into themed Pi-TUI `Text`/`Spacer` nodes shown in the agent's transcript view.
-2. **Live status widget** (`widget.ts`) — `DagTaskWidget`, a persistent component placed `aboveEditor` in the Pi TUI that mirrors the task list (counts, active task with elapsed time, blocked-task rows) and self-updates while any task is in progress.
+2. **Live status widget** (`widget.ts`) — `DagTaskWidget`, a persistent component placed `aboveEditor` in the Pi TUI that mirrors the task list (counts, in_progress task with elapsed time, blocked-task rows) and self-updates while any task is in progress.
 
 Both are pure view code: they read from `DagTaskStore`/`config` and from tool `details` payloads, never mutate state. All rendering is theme-driven (`theme.fg(color, text)`, `strikethrough`).
 
 ## Design
 - **Theme-bound output.** Everything rendered returns Pi-TUI primitives (`Text`, `Spacer` from `@earendil-works/pi-tui`) and colors via `Theme` (`@earendil-works/pi-coding-agent`). Semantic color tokens: `accent`, `success`, `warning`, `error`, `dim`, `muted`, `toolTitle`.
 - **Collapsed vs expanded.** Result renderers accept `{ expanded }`; collapsed shows a minimal summary (header + operations), expanded appends a full task snapshot / archive history. `renderCall` for both tools returns `Spacer(0)` to suppress the input echo.
-- **Scope branching (query).** `renderTaskQueryResult` dispatches on `details.scope`: `history` → archive list; `active` → current snapshot; `ready` → "Next tasks" with active/ready/blocked (blocked hidden when collapsed).
+- **Scope branching (query).** `renderTaskQueryResult` dispatches on `details.scope`: `history` → archive list; `current` → current snapshot; `ready` → "Next tasks" with in_progress/ready/blocked (blocked hidden when collapsed).
 - **Widget two-mode layout.** Full mode (≤8 tasks) lists every task; compact mode (>8) keeps the 2 most-recent completed plus all open, collapsing the rest into `+N open`.
 - **Elapsed-time freeze.** The widget stamps `displayNow` only inside `update()`, so incidental TUI re-renders (e.g. loader spinner) do not tick the elapsed clock each second; the animation interval (120ms when `animateActiveTasks`) re-runs `update()` to refresh it.
 
 ## Flow
 - **Mutation result (`task`):** `renderTaskResult` reads `TaskResultDetails` → `manageHeader(action)` title → loops `operations` through `renderOperationLine` (+ `renderOperationWarnings`); if `expanded` and tasks present, appends "Current state" via `renderTaskSnapshot`, then optional `guidance`.
-- **Query result (`task_query`):** `renderTaskQueryResult` reads `TaskQueryResultDetails` and branches on `scope` (`history`/`active`/`ready`) as described above.
+- **Query result (`task_query`):** `renderTaskQueryResult` reads `TaskQueryResultDetails` and branches on `scope` (`history`/`current`/`ready`) as described above.
 - **Widget:** `update()` (the single refresh entry point) reads `store.list()`, writes the status string, (de)registers the widget + timer, then asks the TUI to render; the registered factory calls `render(width)` each cycle.
 
 ## Integration
@@ -33,7 +33,7 @@ Both are pure view code: they read from `DagTaskStore`/`config` and from tool `d
 - `renderTaskCall(_args, _theme)` — `Spacer(0)`; suppresses mutation call echo.
 - `renderTaskResult(result, { expanded }, theme)` — header via `manageHeader(action)`; per-operation lines (`renderOperationLine` + `renderOperationWarnings`); expanded → `renderTaskSnapshot` under "Current state" + `guidance`.
 - `renderTaskQueryCall(_args, _theme)` — `Spacer(0)`; suppresses query call echo.
-- `renderTaskQueryResult(result, { expanded }, theme)` — branches on `details.scope`: `history` → `renderArchiveSnapshot`; `active` → `renderTaskSnapshot`; `ready` → "Next tasks" header + active/ready/(blocked-if-expanded) lines.
+- `renderTaskQueryResult(result, { expanded }, theme)` — branches on `details.scope`: `history` → `renderArchiveSnapshot`; `current` → `renderTaskSnapshot`; `ready` → "Next tasks" header + in_progress/ready/(blocked-if-expanded) lines.
 
 **Private helpers:** theme/markup — `toolMarker`, `insetText`, `looksLikeToolError`, `renderFallbackResult`; headers — `renderHeaderFromCounts`, `renderHeader`; task lines — `openBlockers`, `renderTaskIcon`, `renderDependencyHint`, `renderTaskLine`; operations — `operationIcon` (`TaskOperationKind`→glyph: skipped `!`/purged `−`/archived `◌`/started `◼`/completed `✔`/unblocked `◻`), `operationVerb`, `manageHeader`, `renderOperationLine`, `renderOperationWarnings`; snapshots — `renderTaskSnapshot` (header + `limit` task lines, `+N more`), `renderArchiveSnapshot`.
 
@@ -43,20 +43,20 @@ Both are pure view code: they read from `DagTaskStore`/`config` and from tool `d
 
 ## widget.ts
 
-**Responsibility:** `DagTaskWidget` — a persistent Pi-TUI status component (placement `aboveEditor`, order 20) showing live task progress: a compact `Tasks · X/Y done · K active` header, per-task rows (icon + `#id` + title/activeForm, elapsed time for in-progress, "blocked by #x, #y" hints, strikethrough for completed), collapsing to a compact layout when the list exceeds 8 rows. Self-refreshes while any task is `in_progress` and clears itself when the list empties.
+**Responsibility:** `DagTaskWidget` — a persistent Pi-TUI status component (placement `aboveEditor`, order 20) showing live task progress: a compact `Tasks · X/Y done · K in_progress` header, per-task rows (icon + `#id` + title/activeForm, elapsed time for in-progress, "blocked by #x, #y" hints, strikethrough for completed), collapsing to a compact layout when the list exceeds 8 rows. Self-refreshes while any task is `in_progress` and clears itself when the list empties.
 
 **Key export:**
 - `class DagTaskWidget` — `constructor(store: DagTaskStore, config: () => DagTasksConfig = () => ({}))`.
   - `setStore(store)`, `setHost(host: WidgetHost)` — late-binding injectors (host exposes `setStatus(key, text)` + `widgets`).
   - `markActive(_id, _active)` — re-render trigger; effectively delegates to `update()`. Called by `src/index.ts` on every in_progress transition.
-  - `update()` — single refresh entry point: computes status string (`tasks N/M open · K active` → `setStatus(WIDGET_KEY)`), registers the widget factory once, manages the animation timer, advances `frame`, requests a render. No-op until `host` is set.
+  - `update()` — single refresh entry point: computes status string (`tasks N/M open · K in_progress` → `setStatus(WIDGET_KEY)`), registers the widget factory once, manages the animation timer, advances `frame`, requests a render. No-op until `host` is set.
   - `dispose()` — stops timer, removes widget, clears status.
   - `private render(width, theme)` — full layout (≤ `MAX_BODY_ROWS`) or compact (>8: keeps `COMPACT_COMPLETED_ROWS=2` most-recent completed + all open, collapsing older open tasks into `+N open`).
   - `private renderTask(task, theme)` — row formatter: icon, id, title/activeForm, `formatDuration(displayNow - startedAt)` for in_progress, blocked-by hint, strikethrough for completed.
   - `private ensureTimer()` / `stopTimer()` — `setInterval` at `120ms` when `config().animateActiveTasks` else `30_000ms`.
 - **Top-level helpers:** `formatDuration(ms)`, `findLastIndex(items, predicate)`.
 
-**Constants:** `WIDGET_KEY="dag-tasks"`, `WIDGET_PLACEMENT="aboveEditor"`, `WIDGET_ORDER=20`, `SPINNER` (11-glyph array; defined for active-task animation), `MAX_BODY_ROWS=8`, `COMPACT_COMPLETED_ROWS=2`. **Interfaces:** `ThemeLike { fg, strikethrough }`, `WidgetHost { setStatus, widgets }`.
+**Constants:** `WIDGET_KEY="dag-tasks"`, `WIDGET_PLACEMENT="aboveEditor"`, `WIDGET_ORDER=20`, `SPINNER` (11-glyph array; defined for in_progress-task animation), `MAX_BODY_ROWS=8`, `COMPACT_COMPLETED_ROWS=2`. **Interfaces:** `ThemeLike { fg, strikethrough }`, `WidgetHost { setStatus, widgets }`.
 
 **Integration points:**
 - Reads `DagTaskStore.list()` (`../store.js`) and `DagTasksConfig.animateActiveTasks` (`../types.js`) each refresh; writes the status line via `WidgetHost.setStatus` and registers itself through `UtilsClient["widgets"]` (`pi-extension-utils`).

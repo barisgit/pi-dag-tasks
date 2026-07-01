@@ -119,7 +119,7 @@ describe("task reminder publishing", () => {
     await withMemoryTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
-      await createTask(tools, ctx, "Ship reminders", "Very long active context should not be emitted into the volatile reminder trailer.");
+      await createTask(tools, ctx, "Ship reminders", "Very long in_progress context should not be emitted into the volatile reminder trailer.");
 
       advanceTurns(handlers, ctx, 15);
       const messages = [{ role: "user", content: [{ type: "text", text: "hello" }] }];
@@ -140,10 +140,10 @@ describe("task reminder publishing", () => {
         display: false,
       });
       expect(latest.payload.text).toContain("Task checkpoint: 15 turns since task tools.");
-      expect(latest.payload.text).toContain("Continue or complete active #1 Ship reminders");
+      expect(latest.payload.text).toContain("Continue or complete in_progress #1 Ship reminders");
       expect(latest.payload.text).toMatch(/#1 Ship reminders \(~\d+m\)/);
-      expect(latest.payload.text).not.toContain("Active context:");
-      expect(latest.payload.text).not.toContain("Very long active context");
+      expect(latest.payload.text).not.toContain("In progress context:");
+      expect(latest.payload.text).not.toContain("Very long in_progress context");
       expect(latest.payload.text).not.toContain("<task-reminder>");
     });
   });
@@ -227,13 +227,13 @@ describe("task reminder publishing", () => {
       const query = tools.get("task_query");
 
       const created = await tool.execute("tool-call-1", { action: "create", creates: [{ title: "Ship it", status: "in_progress" }] }, new AbortController().signal, () => {}, ctx);
-      expect(created.content[0].text).toContain("1 active. Next: continue active #1 Ship it.");
+      expect(created.content[0].text).toContain("1 in_progress. Next: continue in_progress #1 Ship it.");
       const id = created.details.operations[0].id;
       const completed = await tool.execute("tool-call-2", { action: "update", updates: [{ id, status: "completed" }] }, new AbortController().signal, () => {}, ctx);
       expect(completed.content[0].text).toContain("Next: verify if appropriate; archive completed tasks when ready.");
       const archived = await tool.execute("tool-call-3", { action: "archive_all" }, new AbortController().signal, () => {}, ctx);
       expect(archived.content[0].text).toContain("Next: no tasks remain.");
-      const list = await query.execute("tool-call-4", { scope: "active" }, new AbortController().signal, () => {}, ctx);
+      const list = await query.execute("tool-call-4", { scope: "current" }, new AbortController().signal, () => {}, ctx);
       expect(list.content[0].text).toBe("No tasks");
       expect(handlers).toBeDefined();
     });
@@ -246,7 +246,7 @@ describe("task reminder publishing", () => {
       const tool = tools.get("task");
 
       await tool.execute("tool-call-1", { action: "create", creates: [{ title: "Done", status: "completed" }] }, new AbortController().signal, () => {}, ctx);
-      await tool.execute("tool-call-2", { action: "create", creates: [{ title: "New active", status: "in_progress" }] }, new AbortController().signal, () => {}, ctx);
+      await tool.execute("tool-call-2", { action: "create", creates: [{ title: "New in_progress", status: "in_progress" }] }, new AbortController().signal, () => {}, ctx);
       expect(reminderEvents(emitted, REMINDER_UPSERT_EVENT)).toHaveLength(0);
     });
   });
@@ -288,7 +288,7 @@ describe("task reminder publishing", () => {
         ]);
         expect(records[0]).toMatchObject({
           event: "task_reminder_decision",
-          taskCounts: { total: 1, open: 1, active: 1, ready: 0, blocked: 0, completed: 0 },
+          taskCounts: { total: 1, open: 1, in_progress: 1, ready: 0, blocked: 0, completed: 0 },
         });
         expect(records[0].textChars).toBeGreaterThan(0);
         expect(records[0].textHash).toMatch(/^[a-f0-9]{16}$/);

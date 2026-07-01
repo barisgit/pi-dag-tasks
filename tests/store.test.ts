@@ -101,7 +101,7 @@ describe("DagTaskStore", () => {
     const store = new DagTaskStore();
     store.create({ title: "Free" });
     store.create({ title: "Blocked", blockedBy: ["1"] });
-    store.create({ title: "Active", status: "in_progress" });
+    store.create({ title: "In progress", status: "in_progress" });
 
     expect(store.ready().map((t) => t.title)).toEqual(["Free"]);
   });

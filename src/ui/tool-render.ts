@@ -42,14 +42,14 @@ function renderFallbackResult(result: RenderResultLike, toolName: string, theme:
   return lines.join("\n");
 }
 
-function renderHeaderFromCounts(completed: number, total: number, active: number, theme: Theme): string {
-  return `${toolMarker(theme)}${theme.fg("accent", `Tasks · ${completed}/${total} done${active ? ` · ${active} active` : ""}`)}`;
+function renderHeaderFromCounts(completed: number, total: number, inProgress: number, theme: Theme): string {
+  return `${toolMarker(theme)}${theme.fg("accent", `Tasks · ${completed}/${total} done${inProgress ? ` · ${inProgress} in_progress` : ""}`)}`;
 }
 
 function renderHeader(tasks: DagTask[], theme: Theme): string {
   const completed = tasks.filter((task) => task.status === "completed").length;
-  const active = tasks.filter((task) => task.status === "in_progress").length;
-  return renderHeaderFromCounts(completed, tasks.length, active, theme);
+  const inProgress = tasks.filter((task) => task.status === "in_progress").length;
+  return renderHeaderFromCounts(completed, tasks.length, inProgress, theme);
 }
 
 function openBlockers(task: DagTask, allTasks: DagTask[]): string[] {
@@ -194,20 +194,20 @@ export function renderTaskQueryResult(result: RenderResultLike, { expanded }: { 
     return new Text(renderArchiveSnapshot(history, theme).join("\n"), 0, 0);
   }
 
-  if (details.scope === "active") {
+  if (details.scope === "current") {
     const tasks = details.tasks ?? [];
     return new Text(renderTaskSnapshot(tasks, theme, expanded ? 100 : 20).join("\n"), 0, 0);
   }
 
   // scope "ready"
   const ready = details.ready ?? [];
-  const active = details.active ?? [];
+  const inProgress = details.inProgress ?? [];
   const blocked = details.blocked ?? [];
-  const visible = [...active, ...ready, ...(expanded || blocked.length ? blocked : [])];
+  const visible = [...inProgress, ...ready, ...(expanded || blocked.length ? blocked : [])];
   const allTasks = visible;
   const completedCount = details.completedCount ?? 0;
-  const total = details.totalCount ?? completedCount + active.length + ready.length + blocked.length;
-  const lines = [`${toolMarker(theme)}${theme.fg("toolTitle", "Next tasks")}${theme.fg("dim", ` · ${completedCount}/${total} done${active.length ? ` · ${active.length} active` : ""}`)}`];
+  const total = details.totalCount ?? completedCount + inProgress.length + ready.length + blocked.length;
+  const lines = [`${toolMarker(theme)}${theme.fg("toolTitle", "Next tasks")}${theme.fg("dim", ` · ${completedCount}/${total} done${inProgress.length ? ` · ${inProgress.length} in_progress` : ""}`)}`];
 
   if (visible.length) {
     for (const task of visible) lines.push(renderTaskLine(task, allTasks, theme));

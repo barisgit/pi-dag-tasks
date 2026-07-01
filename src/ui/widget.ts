@@ -44,6 +44,9 @@ export class DagTaskWidget {
   private interval?: ReturnType<typeof setInterval>;
   private tui?: TUI;
   private registered = false;
+  // Timestamp used for elapsed-time display, refreshed only on update() so that
+  // incidental TUI re-renders (e.g. the loader spinner) do not tick it per-second.
+  private displayNow = Date.now();
 
   constructor(private store: DagTaskStore, private config: () => DagTasksConfig = () => ({})) {}
 
@@ -59,7 +62,7 @@ export class DagTaskWidget {
     const tasks = this.store.list();
     const open = tasks.filter((task) => task.status !== "completed").length;
     const inProgress = tasks.filter((task) => task.status === "in_progress").length;
-    this.host.setStatus(WIDGET_KEY, tasks.length ? `tasks ${tasks.length}/${open} open${inProgress ? ` · ${inProgress} active` : ""}` : undefined);
+    this.host.setStatus(WIDGET_KEY, tasks.length ? `tasks ${tasks.length}/${open} open${inProgress ? ` · ${inProgress} in_progress` : ""}` : undefined);
 
     if (tasks.length === 0) {
       if (this.registered) {
@@ -89,6 +92,7 @@ export class DagTaskWidget {
       this.registered = true;
     }
 
+    this.displayNow = Date.now();
     if (tasks.some((task) => task.status === "in_progress")) this.ensureTimer();
     else this.stopTimer();
     this.frame++;
@@ -110,9 +114,9 @@ export class DagTaskWidget {
     if (tasks.length === 0) return [];
     const completed = tasks.filter((task) => task.status === "completed");
     const openTasks = tasks.filter((task) => task.status !== "completed");
-    const active = openTasks.filter((task) => task.status === "in_progress").length;
+    const inProgress = openTasks.filter((task) => task.status === "in_progress").length;
     const compact = tasks.length > MAX_BODY_ROWS;
-    const header = `Tasks · ${completed.length}/${tasks.length} done${active ? ` · ${active} active` : ""}`;
+    const header = `Tasks · ${completed.length}/${tasks.length} done${inProgress ? ` · ${inProgress} in_progress` : ""}`;
     const lines = [truncate(` ${theme.fg("accent", header)}`)];
     if (!compact) {
       for (const task of tasks) lines.push(truncate(this.renderTask(task, theme)));
@@ -147,7 +151,7 @@ export class DagTaskWidget {
     const id = theme.fg("dim", `#${task.id}`);
     const blocked = blockers.length ? ` ${theme.fg("warning", "!")} ${theme.fg("dim", `blocked by ${blockers.map((x) => `#${x}`).join(", ")}`)}` : "";
     if (task.status === "in_progress") {
-      const elapsed = task.startedAt ? ` ${theme.fg("dim", `(${formatDuration(Date.now() - task.startedAt)})`)}` : "";
+      const elapsed = task.startedAt ? ` ${theme.fg("dim", `(${formatDuration(this.displayNow - task.startedAt)})`)}` : "";
       return `  ${icon} ${id} ${theme.fg("accent", task.activeForm || task.title)}${elapsed}${blocked}`;
     }
     if (task.status === "completed") return `  ${icon} ${theme.fg("dim", theme.strikethrough(`#${task.id} ${task.title}`))}`;

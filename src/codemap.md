@@ -4,7 +4,7 @@
 Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for the Pi coding agent. It exposes exactly two LLM tools — `task` (mutations) and `task_query` (reads) — backed by an optional file-persisted store (memory, per-session, or per-project), plus a status-line widget, a periodic state reminder, auto-archive of completed work, and an interactive `/tasks` command.
 
 ## Design
-- **Two-tool contract.** All mutations funnel through `task` (`create`/`update`/`archive`/`archive_all`/`purge`, batch-only via `creates[]`/`updates[]`/`ids[]`); all reads funnel through `task_query` (`scope` = `ready`/`active`/`history`). No singular mutation fields.
+- **Two-tool contract.** All mutations funnel through `task` (`create`/`update`/`archive`/`archive_all`/`purge`, batch-only via `creates[]`/`updates[]`/`ids[]`); all reads funnel through `task_query` (`scope` = `ready`/`current`/`history`). No singular mutation fields.
 - **Dependency graph.** Tasks carry `blocks`/`blockedBy` edges kept in sync bidirectionally by `store.ts`. Edge application runs cycle detection (`hasPath` DFS), self-block, and missing-dependency checks, emitting per-edge `warnings`.
 - **Store layering.** `DagTaskStore` is pure data + locking; it knows nothing of Pi. `index.ts` owns lifecycle, config, reminders, UI, and the auto-archive policy.
 - **Locking.** File-backed stores use a PID-stale `.lock` file with synchronous retry (40ms × 125). Reads (`list`/`get`/`history`) reload from disk; writes go through `withLock` (load → mutate → atomic `tmp`+`rename` save → unlock).
@@ -38,12 +38,12 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 
 **Key internals:**
 - Schemas (typebox, `additionalProperties:false`): `TaskCreateSchema` (L53), `TaskUpdateSchema` (L65), `TaskParams` (L80: `action` + `creates`/`updates`/`ids`), `TaskQueryParams` (L87: `scope` + `limit`/`query`/`includeCompleted`/`includeContext`). Derived TS types `TaskParamsType`/`TaskQueryParamsType` (L95).
-- Pure helpers (L49–209): `textResult`, `statusIcon`, `truncateText`, `formatDuration`, `activeTaskLabel`, `normalizeVerificationText`, `taskSearchText`, `hasVerificationSignal`, `shouldNudgeVerification`, `summarizeTasks`, `formatArchivedAt`, `archiveReasonLabel`, `summarizeHistory`, `countLabel`, `taskStatePrefix`, `buildTaskManageGuidance` (L211, the per-mutation "Next:" guidance), `reminderStateKey`, `buildReminder` (L253), `taskCounts`, `textHash`/`textPreview`, `logReminderDecision`, `taskReminderForgottenMs`, `taskReminderIntent`.
+- Pure helpers (L49–209): `textResult`, `statusIcon`, `truncateText`, `formatDuration`, `inProgressTaskLabel`, `normalizeVerificationText`, `taskSearchText`, `hasVerificationSignal`, `shouldNudgeVerification`, `summarizeTasks`, `formatArchivedAt`, `archiveReasonLabel`, `summarizeHistory`, `countLabel`, `taskStatePrefix`, `buildTaskManageGuidance` (L211, the per-mutation "Next:" guidance), `reminderStateKey`, `buildReminder` (L253), `taskCounts`, `textHash`/`textPreview`, `logReminderDecision`, `taskReminderForgottenMs`, `taskReminderIntent`.
 - Extension state (L351+): `cfg`, `store = new DagTaskStore()`, `logger`, `utilsClient`, `widget = new DagTaskWidget(...)`, `autoArchive = new AutoArchiveManager(() => store, () => cfg.autoArchiveCompleted ?? "on_list_complete", 4)`, plus turn/cooldown counters.
 - Inner functions: `resolveCwd`, `refreshConfig`, `resolveStorePath` (env/scope → file path), `ensureStore`, `ensureUtilsClient`, `refreshUi`, `publishTaskReminder` (due = `turn >= nextReminderTurn && msSinceTaskTool >= taskReminderForgottenMs()`; `reminderStateKey` dedupe), `suppressTaskReminder`.
 - Events: `session_start` (reset+ensure+refresh), `session_shutdown` (dispose), `context` (reminder unless cooldown), `turn_start` (increment turn, `autoArchive.onTurnStart`, refresh), `tool_call`/`tool_result` (suppress reminder on task tools).
 - `pi.registerTool("task")` (L523): `renderShell:"self"`; `execute` dispatches create/update/archive/archive_all/purge, calls `autoArchive.trackCompletion`/`resetBatchCountdown`, detects newly-unblocked tasks, appends guidance; `renderCall: renderTaskCall`, `renderResult: renderTaskResult`.
-- `pi.registerTool("task_query")` (L645): `scope` ready (active + ready[+limit] + blocked + summary), active (current list, `includeCompleted`), history (archived, `query` filter); `renderCall/Result` from `ui/tool-render.js`.
+- `pi.registerTool("task_query")` (L645): `scope` ready (in_progress + ready[+limit] + blocked + summary), in_progress (current list, `includeCompleted`), history (archived, `query` filter); `renderCall/Result` from `ui/tool-render.js`.
 - `pi.registerCommand("tasks")` (L696): interactive menus (view/create/detail/history/settings); settings writes `cfg.autoArchiveCompleted` + `saveConfig`; Complete action → `store.update` + `autoArchive.trackCompletion`.
 
 **Dependencies:** `./store.js` (`DagTaskStore`, `TaskPatch`), `./auto-clear.js` (`AutoArchiveManager`), `./config.js`, `./types.js`, `./ui/tool-render.js`, `./ui/widget.js`.
@@ -53,7 +53,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 
 **Key exports:**
 - `export class DagTaskStore` (~L57) — the store.
-- `export interface TaskPatch` (L47) — update payload: `id` + optional `title`/`description`/`context`/`status`/`activeForm`/`owner`/`metadata` and edge deltas `addBlocks`/`addBlockedBy`/`removeBlocks`/`removeBlockedBy`. (Note: defined here, **not** in `types.ts`.)
+- `export interface TaskPatch` (L47) — update payload: `id` + optional `title`/`description`/`context`/`status`/`activeForm` (internal legacy storage/display only)/`owner`/`metadata` and edge deltas `addBlocks`/`addBlockedBy`/`removeBlocks`/`removeBlockedBy`. (Note: defined here, **not** in `types.ts`.)
 
 **Public API:**
 - `constructor(filePath?)` — if set, configures `lockPath = ${filePath}.lock`, `archivePath = ${dir}/archive.jsonl`, and `load()`s.
@@ -81,7 +81,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 - `interface DagTask` — the core record (`id`, `title`, `description`, `context?`, `status`, `activeForm?`, `owner?`, `blocks[]`, `blockedBy[]`, `metadata`, `createdAt`, `startedAt?`, `completedAt?`, `updatedAt`).
 - `StoreData` (`{nextId, tasks[]}`) — on-disk JSON shape.
 - `TaskResultDetails` (`action?`, `operations[]`, `tasks?`, `guidance?`) — `task` tool structured result.
-- `TaskQueryResultDetails` (`scope`, `ready?`/`active?`/`blocked?`/`tasks?`/`history?`, `completedCount?`, `totalCount?`) — `task_query` structured result (fields vary by scope).
+- `TaskQueryResultDetails` (`scope`, `ready?`/`inProgress?`/`blocked?`/`tasks?`/`history?`, `completedCount?`, `totalCount?`) — `task_query` structured result (fields vary by scope).
 - `ArchivedDagTask` (`archivedAt`, `archiveReason` `completed`|`selected`, `task`).
 - `DagTasksConfig` (`taskScope?`, `autoArchiveCompleted?`, `animateActiveTasks?`) — on-disk config.
 

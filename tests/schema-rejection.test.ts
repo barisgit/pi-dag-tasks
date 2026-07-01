@@ -47,10 +47,11 @@ describe("two-tool schema rejection", () => {
     expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", status: "in_progress" }] })).toBe(true);
   });
 
-  test("task_query requires a valid scope and rejects list/history/next as scopes", () => {
+  test("task_query requires a valid scope and rejects active/list/next as scopes", () => {
     expect(Value.Check(querySchema, { scope: "ready" })).toBe(true);
-    expect(Value.Check(querySchema, { scope: "active" })).toBe(true);
+    expect(Value.Check(querySchema, { scope: "current" })).toBe(true);
     expect(Value.Check(querySchema, { scope: "history" })).toBe(true);
+    expect(Value.Check(querySchema, { scope: "active" })).toBe(false);
     expect(Value.Check(querySchema, { scope: "list" })).toBe(false);
     expect(Value.Check(querySchema, { scope: "next" })).toBe(false);
     expect(Value.Check(querySchema, { scope: "history", limit: 5, query: "x", includeCompleted: false, includeContext: true })).toBe(true);
@@ -75,5 +76,10 @@ describe("two-tool schema rejection", () => {
     expect(Value.Check(taskSchema, { action: "archive", ids: ["1"], id: "1" })).toBe(false);
     // A valid batch call with no stray fields still passes.
     expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x" }] })).toBe(true);
+    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1" }] })).toBe(true);
+    expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", activeForm: "Working x" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", inProgressForm: "Working x" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", activeForm: "Working x" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", inProgressForm: "Working x" }] })).toBe(false);
   });
 });

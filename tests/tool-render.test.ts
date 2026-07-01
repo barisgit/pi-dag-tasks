@@ -53,7 +53,7 @@ describe("task tool renderers", () => {
     const rendered = renderTaskQueryResult({
       content: [{ type: "text", text: "" }],
       details: {
-        scope: "active",
+        scope: "current",
         tasks: [task("1", "Done", "completed")],
       },
     }, { expanded: true }, colorTheme as any);
@@ -149,7 +149,7 @@ describe("task tool renderers", () => {
       content: [{ type: "text", text: "Summary" }],
       details: {
         scope: "ready",
-        active: [task("1", "Implement", "in_progress")],
+        inProgress: [task("1", "Implement", "in_progress")],
         ready: [task("2", "Verify", "pending")],
         blocked: [],
         completedCount: 3,
@@ -158,6 +158,6 @@ describe("task tool renderers", () => {
     }, {}, theme as any);
 
     const text = textOf(rendered);
-    expect(text).toBe(" ● Next tasks · 3/5 done · 1 active\n  ◼ #1 Implement\n  ◻ #2 Verify");
+    expect(text).toBe(" ● Next tasks · 3/5 done · 1 in_progress\n  ◼ #1 Implement\n  ◻ #2 Verify");
   });
 });

@@ -4,7 +4,7 @@ export type TaskStatus = "pending" | "in_progress" | "completed";
 export type TaskMutationAction = "create" | "update" | "archive" | "archive_all" | "purge";
 
 /** Read scopes accepted by the `task_query` tool. */
-export type TaskQueryScope = "ready" | "active" | "history";
+export type TaskQueryScope = "ready" | "current" | "history";
 
 export type TaskOperationKind =
   | "created"
@@ -60,9 +60,9 @@ export interface TaskResultDetails {
 export interface TaskQueryResultDetails {
   scope: TaskQueryScope;
   ready?: DagTask[];        // scope "ready": unblocked pending tasks
-  active?: DagTask[];       // scope "ready": in_progress tasks
+  inProgress?: DagTask[];   // scope "ready": in_progress tasks
   blocked?: DagTask[];      // scope "ready": pending tasks with open blockers
-  tasks?: DagTask[];        // scope "active": the current (non-archived) list
+  tasks?: DagTask[];        // scope "current": the current (non-archived) list
   history?: ArchivedDagTask[]; // scope "history": archived tasks, newest first
   completedCount?: number;
   totalCount?: number;

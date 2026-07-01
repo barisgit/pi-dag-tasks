@@ -55,12 +55,11 @@ const TaskCreateSchema = Type.Object({
   description: Type.Optional(Type.String()),
   context: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed"] as const)),
-  activeForm: Type.Optional(Type.String()),
   blockedBy: Type.Optional(Type.Array(Type.String())),
   blocks: Type.Optional(Type.Array(Type.String())),
   owner: Type.Optional(Type.String()),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Any())),
-});
+}, { additionalProperties: false });
 
 const TaskUpdateSchema = Type.Object({
   id: Type.String(),
@@ -68,14 +67,13 @@ const TaskUpdateSchema = Type.Object({
   description: Type.Optional(Type.String()),
   context: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed"] as const)),
-  activeForm: Type.Optional(Type.String()),
   owner: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Any())),
   addBlocks: Type.Optional(Type.Array(Type.String())),
   addBlockedBy: Type.Optional(Type.Array(Type.String())),
   removeBlocks: Type.Optional(Type.Array(Type.String())),
   removeBlockedBy: Type.Optional(Type.Array(Type.String())),
-});
+}, { additionalProperties: false });
 
 const TaskParams = Type.Object({
   action: StringEnum(["create", "update", "archive", "archive_all", "purge"] as const),
@@ -85,22 +83,25 @@ const TaskParams = Type.Object({
 }, { additionalProperties: false });
 
 const TaskQueryParams = Type.Object({
-  scope: StringEnum(["ready", "active", "history"] as const),
+  scope: StringEnum(["ready", "current", "history"] as const),
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
   query: Type.Optional(Type.String()),
   includeCompleted: Type.Optional(Type.Boolean({ default: true })),
   includeContext: Type.Optional(Type.Boolean({ default: false })),
 }, { additionalProperties: false });
 
+type PublicTaskCreateInput = Omit<Parameters<DagTaskStore["create"]>[0], "activeForm">;
+type PublicTaskUpdateInput = Omit<TaskPatch, "activeForm">;
+
 type TaskParamsType = {
   action: "create" | "update" | "archive" | "archive_all" | "purge";
-  creates?: Array<Omit<Parameters<DagTaskStore["create"]>[0], never>>;
-  updates?: TaskPatch[];
+  creates?: PublicTaskCreateInput[];
+  updates?: PublicTaskUpdateInput[];
   ids?: string[];
 };
 
 type TaskQueryParamsType = {
-  scope: "ready" | "active" | "history";
+  scope: "ready" | "current" | "history";
   limit?: number;
   query?: string;
   includeCompleted?: boolean;
@@ -136,7 +137,7 @@ function formatReminderDuration(ms: number): string {
   return rem ? `~${hours}h ${rem}m` : `~${hours}h`;
 }
 
-function activeTaskLabel(task: DagTask, now = Date.now()): string {
+function inProgressTaskLabel(task: DagTask, now = Date.now()): string {
   const elapsed = task.startedAt ? ` (${formatReminderDuration(now - task.startedAt)})` : "";
   return `#${task.id} ${task.title}${elapsed}`;
 }
@@ -199,9 +200,9 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function taskStatePrefix(active: DagTask[], ready: DagTask[], blocked: DagTask[], completed: number): string {
+function taskStatePrefix(inProgress: DagTask[], ready: DagTask[], blocked: DagTask[], completed: number): string {
   return [
-    active.length ? countLabel(active.length, "active") : undefined,
+    inProgress.length ? countLabel(inProgress.length, "in_progress", "in_progress") : undefined,
     ready.length ? countLabel(ready.length, "ready") : undefined,
     blocked.length ? countLabel(blocked.length, "blocked") : undefined,
     completed ? countLabel(completed, "done") : undefined,
@@ -216,16 +217,16 @@ function buildTaskManageGuidance(store: DagTaskStore): string {
   const open = tasks.length - completed;
   if (open === 0) return `${countLabel(completed, "task")} done. Next: verify if appropriate; archive completed tasks when ready.`;
 
-  const active = tasks.filter((task) => task.status === "in_progress");
+  const inProgress = tasks.filter((task) => task.status === "in_progress");
   const ready = store.ready();
   const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
-  const prefix = taskStatePrefix(active, ready, blocked, completed);
+  const prefix = taskStatePrefix(inProgress, ready, blocked, completed);
   const state = prefix ? `${prefix}. ` : "";
 
-  if (active.length > 0) {
-    const primary = active[0];
+  if (inProgress.length > 0) {
+    const primary = inProgress[0];
     const readyText = ready.length ? ` Ready after that: #${ready[0].id}.` : "";
-    return `${state}Next: continue active #${primary.id} ${primary.title}.${readyText}`;
+    return `${state}Next: continue in_progress #${primary.id} ${primary.title}.${readyText}`;
   }
 
   if (ready.length > 0) {
@@ -253,7 +254,7 @@ function reminderStateKey(store: DagTaskStore): string {
 function buildReminder(store: DagTaskStore, turnsSinceTaskTool: number): string | undefined {
   const tasks = store.list();
   if (tasks.length === 0) return undefined;
-  const active = tasks.filter((task) => task.status === "in_progress");
+  const inProgress = tasks.filter((task) => task.status === "in_progress");
   const ready = store.ready();
   const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
   const completed = tasks.filter((task) => task.status === "completed").length;
@@ -263,8 +264,8 @@ function buildReminder(store: DagTaskStore, turnsSinceTaskTool: number): string 
     if (shouldNudgeVerification(tasks)) parts.push("No verification task is recorded. Verify the work if practical, or state why verification was not run before finalizing.");
     return parts.join("\n");
   }
-  if (active[0]) {
-    const parts = [`Task checkpoint: ${turnsSinceTaskTool} turns since task tools. Continue or complete active ${activeTaskLabel(active[0])}.`];
+  if (inProgress[0]) {
+    const parts = [`Task checkpoint: ${turnsSinceTaskTool} turns since task tools. Continue or complete in_progress ${inProgressTaskLabel(inProgress[0])}.`];
     if (ready.length > 0) parts.push(`Ready after that: ${ready.slice(0, 3).map((task) => `#${task.id} ${task.title}`).join("; ")}.`);
     return parts.join("\n");
   }
@@ -281,13 +282,13 @@ function buildReminder(store: DagTaskStore, turnsSinceTaskTool: number): string 
 function taskCounts(store: DagTaskStore): Record<string, number> {
   const tasks = store.list();
   const completed = tasks.filter((task) => task.status === "completed").length;
-  const active = tasks.filter((task) => task.status === "in_progress").length;
+  const in_progress = tasks.filter((task) => task.status === "in_progress").length;
   const ready = store.ready().length;
   const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0).length;
   return {
     total: tasks.length,
     open: tasks.length - completed,
-    active,
+    in_progress,
     ready,
     blocked,
     completed,
@@ -541,7 +542,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       "Do not create standalone tasks for tiny process/meta instructions like compress context, reply concisely, run final check, or summarize changes unless they are a real multi-step workflow phase; include them in the relevant task context/definition of done instead.",
       "Complete tasks as soon as their work is fully done; avoid batching status updates at the end.",
       "Only mark completed work that is actually finished; if verification is appropriate, complete after running it or record why it was skipped.",
-      "Use action:'archive_all' to sweep all completed tasks in one operation, or action:'archive' with ids[] to archive specific tasks once they are ready to leave the active review surface.",
+      "Use action:'archive_all' to sweep all completed tasks in one operation, or action:'archive' with ids[] to archive specific tasks once they are ready to leave the current review surface.",
       "Use task_query with scope:'ready' for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
     ],
     parameters: TaskParams,
@@ -645,10 +646,10 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "task_query",
     label: "Task Query",
-    description: "Read Pi's task list. scope:'ready' returns unblocked pending + active tasks plus a summary; scope:'active' returns the current list; scope:'history' returns archived tasks newest-first. Optional: limit, query, includeCompleted (default true), includeContext (default false).",
+    description: "Read Pi's task list. scope:'ready' returns unblocked pending + in_progress tasks plus a summary; scope:'current' returns the current list; scope:'history' returns archived tasks newest-first. Optional: limit, query, includeCompleted (default true), includeContext (default false).",
     promptSnippet: "Query task list",
     promptGuidelines: [
-      "Use task_query to orient on the task list without mutating it: scope:'ready' for ready/unblocked work, scope:'active' for the current list, scope:'history' for archived work.",
+      "Use task_query to orient on the task list without mutating it: scope:'ready' for ready/unblocked work, scope:'current' for the current list, scope:'history' for archived work.",
       "Prefer ready tasks in ID order and don't start blocked tasks.",
       "Use after completing work or when resuming; set includeContext:true when you need durable task setup.",
     ],
@@ -664,22 +665,22 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
         const tasks = store.list();
         const allReady = store.ready();
         const ready = allReady.slice(0, limit);
-        const active = tasks.filter((task) => task.status === "in_progress");
+        const inProgress = tasks.filter((task) => task.status === "in_progress");
         const blocked = tasks.filter((task) => task.status === "pending" && store.openBlockers(task).length > 0);
         const completed = tasks.filter((task) => task.status === "completed");
-        const lines = [`Summary: ${tasks.length} total, ${allReady.length} ready, ${active.length} active, ${blocked.length} blocked, ${completed.length} completed.`];
-        if (active.length) lines.push(`Active:\n${summarizeTasks(store, active, true, includeContext)}`);
+        const lines = [`Summary: ${tasks.length} total, ${allReady.length} ready, ${inProgress.length} in_progress, ${blocked.length} blocked, ${completed.length} completed.`];
+        if (inProgress.length) lines.push(`In progress:\n${summarizeTasks(store, inProgress, true, includeContext)}`);
         lines.push(ready.length ? `Ready:\n${summarizeTasks(store, ready, true, includeContext)}` : "Ready: none");
         lines.push(blocked.length ? `Blocked:\n${summarizeTasks(store, blocked, true)}` : "Blocked: none");
-        const details: TaskQueryResultDetails = { scope: "ready", ready, active, blocked, completedCount: completed.length, totalCount: tasks.length };
+        const details: TaskQueryResultDetails = { scope: "ready", ready, inProgress, blocked, completedCount: completed.length, totalCount: tasks.length };
         return textResult(lines.join("\n\n"), details);
       }
 
-      if (params.scope === "active") {
+      if (params.scope === "current") {
         const tasks = store.list();
         const visible = includeCompleted ? tasks : tasks.filter((task) => task.status !== "completed");
         const lines = [summarizeTasks(store, visible, includeCompleted, includeContext)];
-        const details: TaskQueryResultDetails = { scope: "active", tasks: visible };
+        const details: TaskQueryResultDetails = { scope: "current", tasks: visible };
         return textResult(lines.join("\n"), details);
       }
 
@@ -720,10 +721,10 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       const viewTasks = async (): Promise<void> => {
         const tasks = store.list();
         if (tasks.length === 0) {
-          const emptyChoice = await ctx.ui.select("No active tasks", ["View archived tasks", "← Back"]);
+          const emptyChoice = await ctx.ui.select("No current tasks", ["View archived tasks", "← Back"]);
           return emptyChoice === "View archived tasks" ? viewHistory() : main();
         }
-        const selected = await ctx.ui.select("Active tasks", [...tasks.map((task) => `${statusIcon(task.status)} #${task.id} [${task.status}] ${task.title}`), "← Back"]);
+        const selected = await ctx.ui.select("Current tasks", [...tasks.map((task) => `${statusIcon(task.status)} #${task.id} [${task.status}] ${task.title}`), "← Back"]);
         if (!selected || selected === "← Back") return main();
         const id = selected.match(/#(\d+)/)?.[1];
         if (id) return taskDetail(id);

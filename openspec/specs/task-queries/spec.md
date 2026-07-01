@@ -5,14 +5,14 @@ TBD - created by archiving change split-task-tools. Update Purpose after archive
 ## Requirements
 ### Requirement: Query tool surface
 
-The system SHALL expose exactly one read tool named `task_query` that performs all task reads. Reads SHALL be selected by a `scope` field with values `ready`, `active`, and `history`. The system SHALL NOT expose `task_next`, `list`, or `history` as separate tools or mutation actions.
+The system SHALL expose exactly one read tool named `task_query` that performs all task reads. Reads SHALL be selected by a `scope` field with values `ready`, `current`, and `history`. The system SHALL NOT expose `task_next`, `list`, or `history` as separate tools or mutation actions.
 
 #### Scenario: Each scope is accepted
-- **WHEN** a caller invokes `task_query` with `scope` set to `ready`, `active`, or `history`
+- **WHEN** a caller invokes `task_query` with `scope` set to `ready`, `current`, or `history`
 - **THEN** the corresponding read is returned
 
 #### Scenario: Invalid scope is rejected
-- **WHEN** a caller invokes `task_query` with a scope other than ready, active, or history
+- **WHEN** a caller invokes `task_query` with a scope other than ready, current, or history
 - **THEN** the call fails validation
 
 ### Requirement: ready scope
@@ -21,14 +21,14 @@ The `ready` scope SHALL return unblocked `pending` tasks and `in_progress` tasks
 
 #### Scenario: Ready and blocked tasks are distinguished
 - **WHEN** task 1 is pending with no open blockers, task 2 is pending blocked by task 1, and task 3 is in_progress
-- **THEN** `scope: "ready"` lists task 1 as ready and task 3 as active, and reports task 2 as blocked
+- **THEN** `scope: "ready"` lists task 1 as ready and task 3 as in_progress, and reports task 2 as blocked
 
-### Requirement: active scope
+### Requirement: in_progress scope
 
-The `active` scope SHALL return the current (non-archived) task list, including completed tasks unless `includeCompleted` is false.
+The `current` scope SHALL return the current (non-archived) task list, including completed tasks unless `includeCompleted` is false.
 
-#### Scenario: Active list includes completed by default
-- **WHEN** the active list contains pending, in_progress, and completed tasks and `scope: "active"` is invoked with default options
+#### Scenario: Current list includes completed by default
+- **WHEN** the current list contains pending, in_progress, and completed tasks and `scope: "current"` is invoked with default options
 - **THEN** all non-archived tasks are returned, including completed ones
 
 ### Requirement: history scope
@@ -41,9 +41,9 @@ The `history` scope SHALL return archived tasks, newest first, honoring `limit` 
 
 ### Requirement: Query filtering
 
-`task_query` SHALL accept `limit`, `query`, `includeCompleted` (default true), and `includeContext` (default false). `includeContext` SHALL include each task's durable `context` in the output for ready/active scopes when true.
+`task_query` SHALL accept `limit`, `query`, `includeCompleted` (default true), and `includeContext` (default false). `includeContext` SHALL include each task's durable `context` in the output for ready/current scopes when true.
 
 #### Scenario: Context included on request
-- **WHEN** `scope: "active", includeContext: true` is invoked and a task has context set
+- **WHEN** `scope: "current", includeContext: true` is invoked and a task has context set
 - **THEN** the task's context is included in the returned output
 

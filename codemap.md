@@ -1,7 +1,7 @@
 # Repository Atlas: pi-dag-tasks
 
 ## Project Responsibility
-A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single task/todo tracker: exposes exactly two LLM-callable tools — `task` (all mutations, batch-only) and `task_query` (all reads, scope-based) — backed by an optional file-persisted store with dependency edges (blocks/blockedBy), a persistent TUI status widget, periodic state reminders, turn-delayed auto-archive of completed work, and an interactive `/tasks` command. Working memory for the active execution slice; not a roadmap/milestone planner (that's `pi-charter`).
+A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single task/todo tracker: exposes exactly two LLM-callable tools — `task` (all mutations, batch-only) and `task_query` (all reads, scope-based) — backed by an optional file-persisted store with dependency edges (blocks/blockedBy), a persistent TUI status widget, periodic state reminders, turn-delayed auto-archive of completed work, and an interactive `/tasks` command. Working memory for the in_progress execution slice; not a roadmap/milestone planner (that's `pi-charter`).
 
 ## System Entry Points
 - `src/index.ts` — sole extension export (`export default dagTasksExtension(pi)`); registers the two tools, the `/tasks` command, lifecycle event handlers, the reminder system, and the widget.
@@ -10,7 +10,7 @@ A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single
 
 ## Tool Surface (the contract)
 - `task` — mutations: `action` ∈ {`create`, `update`, `archive`, `archive_all`, `purge`}. Batch-only: `create`→`creates[]`, `update`→`updates[]` (`id` required per entry), `archive`/`purge`→`ids[]`, `archive_all`→no args. Completing a task = `update` with `status:"completed"`. `additionalProperties:false` (no singular fields, no top-level `id`).
-- `task_query` — reads: `scope` ∈ {`ready`, `active`, `history`} + `limit?`/`query?`/`includeCompleted?`(default true)/`includeContext?`(default false). `ready` = unblocked pending + active + summary.
+- `task_query` — reads: `scope` ∈ {`ready`, `current`, `history`} + `limit?`/`query?`/`includeCompleted?`(default true)/`includeContext?`(default false). `ready` = unblocked pending + in_progress + summary.
 
 ## Directory Map (Aggregated)
 | Directory | Responsibility Summary | Detailed Map |
@@ -27,7 +27,7 @@ A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single
 
 ## Persistence Layout
 File-backed (resolved via `PI_DAG_TASKS` env or `cfg.taskScope` `memory`/`session`/`project`):
-- `.pi/dag-tasks/tasks-<sessionId>.json` (session, default) / `tasks.json` (project) — active tasks + `nextId`.
+- `.pi/dag-tasks/tasks-<sessionId>.json` (session, default) / `tasks.json` (project) — in_progress tasks + `nextId`.
 - `.pi/dag-tasks/archive.jsonl` — appended on archive; `history` scope reads this. **Memory mode (`PI_DAG_TASKS=off`/scope `memory`) persists nothing — archiving and history are file-backed only.**
 - `.pi/dag-tasks/dag-tasks-config.json` — `taskScope`, `autoArchiveCompleted`, `animateActiveTasks`.
 - Writes: atomic `tmp`+`rename` under a PID-stale `.lock` (40ms×125 retry).

@@ -41,7 +41,7 @@ Every entry in `updates` SHALL include an `id`. The `task` tool SHALL NOT accept
 
 ### Requirement: Completion via update
 
-Completing a task SHALL be performed with `action: "update"` and `status: "completed"`. Setting status to `completed` SHALL record the completion timestamp and clear the task's active marker.
+Completing a task SHALL be performed with `action: "update"` and `status: "completed"`. Setting status to `completed` SHALL record the completion timestamp and clear the task's in_progress marker.
 
 #### Scenario: Update marks a task completed
 - **WHEN** a caller passes `updates: [{ id: "3", status: "completed" }]`
