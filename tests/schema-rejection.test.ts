@@ -77,9 +77,87 @@ describe("two-tool schema rejection", () => {
     // A valid batch call with no stray fields still passes.
     expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x" }] })).toBe(true);
     expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1" }] })).toBe(true);
-    expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", activeForm: "Working x" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", activeForm: "Working x" }] })).toBe(true);
     expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", inProgressForm: "Working x" }] })).toBe(false);
-    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", activeForm: "Working x" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", activeForm: "Working x" }] })).toBe(true);
     expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", inProgressForm: "Working x" }] })).toBe(false);
+  });
+
+  test("task prepares unambiguous legacy update arguments before validation", () => {
+    const tool = tools.get("task");
+    const prepared = tool.prepareArguments({
+      action: "update",
+      id: "1",
+      update: { status: "completed" },
+    });
+
+    expect(prepared).toEqual({
+      action: "update",
+      updates: [{ id: "1", status: "completed" }],
+    });
+    expect(Value.Check(taskSchema, prepared)).toBe(true);
+  });
+
+  test("task prepares singular creates and harmless legacy task fields", () => {
+    const tool = tools.get("task");
+    const prepared = tool.prepareArguments({
+      action: "create",
+      create: { title: "x", activeForm: "Working on x" },
+    });
+
+    expect(prepared).toEqual({ action: "create", creates: [{ title: "x", activeForm: "Working on x" }] });
+    expect(Value.Check(taskSchema, prepared)).toBe(true);
+
+    const renamed = tool.prepareArguments({
+      action: "create",
+      create: { title: "x", inProgressForm: "Working on x" },
+    });
+    expect(renamed).toEqual({ action: "create", creates: [{ title: "x", activeForm: "Working on x" }] });
+    expect(Value.Check(taskSchema, renamed)).toBe(true);
+  });
+
+  test("task prepares unambiguous completion and query aliases", () => {
+    const task = tools.get("task");
+    const query = tools.get("task_query");
+
+    expect(task.prepareArguments({ action: "complete", id: "2" })).toEqual({
+      action: "update",
+      updates: [{ id: "2", status: "completed" }],
+    });
+    expect(query.prepareArguments({ scope: "active" })).toEqual({ scope: "current" });
+  });
+
+  test("task preparation preserves targeted archive intent and rejects conflicts", () => {
+    const tool = tools.get("task");
+
+    const targeted = tool.prepareArguments({ action: "archive", id: "1", archive: "completed" });
+    expect(Value.Check(taskSchema, targeted)).toBe(false);
+
+    const conflictingCreate = tool.prepareArguments({
+      action: "create",
+      create: { title: "legacy" },
+      creates: [{ title: "canonical" }],
+    });
+    expect(Value.Check(taskSchema, conflictingCreate)).toBe(false);
+
+    expect(Value.Check(taskSchema, tool.prepareArguments({ action: "archive", archive: "completed", creates: [{ title: "x" }] }))).toBe(false);
+    expect(Value.Check(taskSchema, tool.prepareArguments({ action: "update", ids: ["1"], update: { id: "2", status: "completed" } }))).toBe(false);
+    expect(Value.Check(taskSchema, tool.prepareArguments({ action: "create", updates: [{ id: "1", status: "completed" }] }))).toBe(false);
+    expect(Value.Check(taskSchema, tool.prepareArguments({ action: "create", ids: ["1"] }))).toBe(false);
+  });
+
+  test("task preparation consumes an unambiguous flat update", () => {
+    const tool = tools.get("task");
+    const prepared = tool.prepareArguments({ action: "update", id: 3, status: "in_progress" });
+
+    expect(prepared).toEqual({ action: "update", updates: [{ id: "3", status: "in_progress" }] });
+    expect(Value.Check(taskSchema, prepared)).toBe(true);
+  });
+
+  test("task preparation does not make ambiguous garbage valid", () => {
+    const tool = tools.get("task");
+    const prepared = tool.prepareArguments({ action: "update", update: { status: "completed" } });
+
+    expect(Value.Check(taskSchema, prepared)).toBe(false);
   });
 });

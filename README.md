@@ -12,8 +12,8 @@ Only two LLM-callable tools are exposed:
 
 - `task` — all mutations. Batch-only inputs; each action reads exactly one field.
   - actions: `create`, `update`, `archive`, `archive_all`, `purge`
-  - `create` → `creates: [{ title, status?, blockedBy?, blocks?, context?, owner?, metadata? }]`
-  - `update` → `updates: [{ id, status?, title?, context?, owner?, metadata?, addBlockedBy?, addBlocks?, removeBlockedBy?, removeBlocks? }]` — `id` is required in every entry
+  - `create` → `creates: [{ title, status?, blockedBy?, blocks?, context?, owner?, metadata?, activeForm? }]`
+  - `update` → `updates: [{ id, status?, title?, context?, owner?, metadata?, activeForm?, addBlockedBy?, addBlocks?, removeBlockedBy?, removeBlocks? }]` — `id` is required in every entry
   - `archive` / `purge` → `ids: ["1", "2"]`
   - `archive_all` → no arguments (archives every completed task)
   - completing a task is `update` with `status: "completed"`; there is no separate `complete` action
@@ -25,7 +25,9 @@ Only two LLM-callable tools are exposed:
   - scopes: `ready` (unblocked pending + in_progress tasks, plus a summary), `current` (the current list, including completed unless `includeCompleted: false`), `history` (archived tasks, newest first)
   - optional: `limit`, `query`, `includeCompleted` (default `true`), `includeContext` (default `false`)
 
-There are no singular `create`/`update` fields and no top-level `id`; pass a single item as a one-element array.
+`activeForm` is a deprecated compatibility field for resumed sessions. `inProgressForm` is accepted only as a legacy alias and is normalized to `activeForm`.
+
+Canonical calls have no singular `create`/`update` fields and no top-level `id`; pass a single item as a one-element array. For resumed sessions, Pi normalizes unambiguous legacy single-item shapes before validating them (for example, top-level `id` plus `update` becomes `updates: [{ id, ... }]`). Deprecated `activeForm`/`inProgressForm` hints are preserved when they can be mapped unambiguously. Ambiguous or incomplete calls still fail validation.
 
 Example create-and-start in one call. The second task can use `blockedBy: ["1"]` because IDs are assigned sequentially within the batch:
 

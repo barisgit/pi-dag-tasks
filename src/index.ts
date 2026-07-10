@@ -55,6 +55,7 @@ const TaskCreateSchema = Type.Object({
   description: Type.Optional(Type.String()),
   context: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed"] as const)),
+  activeForm: Type.Optional(Type.String({ description: "Deprecated compatibility field for resumed task sessions." })),
   blockedBy: Type.Optional(Type.Array(Type.String())),
   blocks: Type.Optional(Type.Array(Type.String())),
   owner: Type.Optional(Type.String()),
@@ -67,6 +68,7 @@ const TaskUpdateSchema = Type.Object({
   description: Type.Optional(Type.String()),
   context: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed"] as const)),
+  activeForm: Type.Optional(Type.String({ description: "Deprecated compatibility field for resumed task sessions." })),
   owner: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Any())),
   addBlocks: Type.Optional(Type.Array(Type.String())),
@@ -90,8 +92,8 @@ const TaskQueryParams = Type.Object({
   includeContext: Type.Optional(Type.Boolean({ default: false })),
 }, { additionalProperties: false });
 
-type PublicTaskCreateInput = Omit<Parameters<DagTaskStore["create"]>[0], "activeForm">;
-type PublicTaskUpdateInput = Omit<TaskPatch, "activeForm">;
+type PublicTaskCreateInput = Parameters<DagTaskStore["create"]>[0];
+type PublicTaskUpdateInput = TaskPatch;
 
 type TaskParamsType = {
   action: "create" | "update" | "archive" | "archive_all" | "purge";
@@ -107,6 +109,167 @@ type TaskQueryParamsType = {
   includeCompleted?: boolean;
   includeContext?: boolean;
 };
+
+type RawTaskArguments = Record<string, unknown>;
+
+function isRecord(value: unknown): value is RawTaskArguments {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asArray(value: unknown): unknown[] | undefined {
+  if (value === undefined) return undefined;
+  return Array.isArray(value) ? value : [value];
+}
+
+function normalizeId(value: unknown): unknown {
+  return typeof value === "number" && Number.isInteger(value) ? String(value) : value;
+}
+
+function normalizeIds(value: unknown): unknown[] | undefined {
+  return asArray(value)?.map(normalizeId);
+}
+
+function normalizeLegacyEntry(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const entry = { ...value };
+  // The old UI called this field inProgressForm; the store's durable name is activeForm.
+  if (entry.inProgressForm !== undefined && entry.activeForm === undefined) {
+    entry.activeForm = entry.inProgressForm;
+    delete entry.inProgressForm;
+  }
+  if (entry.id !== undefined) entry.id = normalizeId(entry.id);
+  return entry;
+}
+
+const topLevelUpdateFields = [
+  "title",
+  "description",
+  "context",
+  "status",
+  "activeForm",
+  "inProgressForm",
+  "owner",
+  "metadata",
+  "addBlocks",
+  "addBlockedBy",
+  "removeBlocks",
+  "removeBlockedBy",
+] as const;
+
+/**
+ * Normalize unambiguous shapes emitted by older task prompts before Pi validates
+ * the current strict schema. This keeps the public contract canonical while
+ * allowing resumed sessions and common single-item calls to continue working.
+ */
+function prepareTaskArguments(args: unknown): TaskParamsType {
+  if (!isRecord(args)) return args as TaskParamsType;
+
+  const input = { ...args };
+  const action = input.action;
+  const hasAny = (...keys: string[]) => keys.some((key) => input[key] !== undefined);
+  const rejectMixedAction = () => ({ ...input, action: "__invalid_task_arguments__" }) as unknown as TaskParamsType;
+
+  if (action === "creates" && input.creates !== undefined) input.action = "create";
+  if (action === "updates" && input.updates !== undefined) input.action = "update";
+
+  switch (input.action) {
+    case "create":
+      if (hasAny("update", "updates", "ids", "id", "archive")) return rejectMixedAction();
+      if (input.create !== undefined && input.creates !== undefined) return rejectMixedAction();
+      break;
+    case "update":
+      if (hasAny("create", "creates", "ids", "archive")) return rejectMixedAction();
+      if (input.update !== undefined && input.updates !== undefined) return rejectMixedAction();
+      if (input.id !== undefined && input.updates !== undefined) return rejectMixedAction();
+      break;
+    case "archive":
+      if (hasAny("create", "creates", "update", "updates")) return rejectMixedAction();
+      if (input.archive !== undefined && hasAny("id", "ids")) return rejectMixedAction();
+      if (input.id !== undefined && input.ids !== undefined) return rejectMixedAction();
+      break;
+    case "purge":
+      if (hasAny("create", "creates", "update", "updates", "archive")) return rejectMixedAction();
+      if (input.id !== undefined && input.ids !== undefined) return rejectMixedAction();
+      break;
+    case "archive_all":
+      if (hasAny("create", "creates", "update", "updates", "ids", "id", "archive")) return rejectMixedAction();
+      break;
+    case "complete":
+      if (hasAny("create", "creates", "update", "updates", "archive") || (input.id !== undefined && input.ids !== undefined)) return rejectMixedAction();
+      break;
+  }
+
+  if (input.action === "complete" && !(input.ids !== undefined && input.id !== undefined)) {
+    const ids = normalizeIds(input.ids ?? input.id);
+    if (ids?.length) {
+      input.action = "update";
+      input.updates = ids.map((id) => ({ id, status: "completed" }));
+      delete input.id;
+      delete input.ids;
+    }
+  }
+
+  if (input.action === "archive" && input.archive === "completed" && input.ids === undefined && input.id === undefined) {
+    input.action = "archive_all";
+    delete input.archive;
+  }
+
+  const hasSingularCreate = input.create !== undefined;
+  const hasBatchCreate = input.creates !== undefined;
+  if (!hasBatchCreate && hasSingularCreate) {
+    input.creates = asArray(input.create)?.map(normalizeLegacyEntry);
+    delete input.create;
+  }
+  if (input.creates !== undefined && !hasSingularCreate) {
+    input.creates = asArray(input.creates)?.map(normalizeLegacyEntry);
+  }
+
+  const hasSingularUpdate = input.update !== undefined;
+  const hasBatchUpdate = input.updates !== undefined;
+  if (!hasBatchUpdate && hasSingularUpdate) {
+    input.updates = asArray(input.update);
+  }
+
+  if (input.action === "update" && !hasSingularUpdate && !hasBatchUpdate && input.id !== undefined) {
+    const update: RawTaskArguments = { id: normalizeId(input.id) };
+    for (const field of topLevelUpdateFields) {
+      if (input[field] !== undefined) {
+        update[field] = input[field];
+        delete input[field];
+      }
+    }
+    if (Object.keys(update).length > 1) {
+      input.updates = [update];
+      delete input.id;
+    }
+  }
+
+  if (input.updates !== undefined && !(hasSingularUpdate && hasBatchUpdate)) {
+    const updates = asArray(input.updates)?.map(normalizeLegacyEntry) ?? [];
+    if (hasSingularUpdate && !Array.isArray(input.update) && input.id !== undefined && updates.length === 1 && isRecord(updates[0]) && updates[0].id === undefined) {
+      updates[0] = { ...updates[0], id: normalizeId(input.id) };
+      delete input.id;
+    }
+    input.updates = updates;
+    delete input.update;
+  }
+
+  if (input.ids !== undefined) {
+    input.ids = normalizeIds(input.ids);
+  } else if ((input.action === "archive" || input.action === "purge") && input.id !== undefined) {
+    input.ids = [normalizeId(input.id)];
+    delete input.id;
+  }
+
+  return input as TaskParamsType;
+}
+
+function prepareTaskQueryArguments(args: unknown): TaskQueryParamsType {
+  if (!isRecord(args)) return args as TaskQueryParamsType;
+  if (args.scope === "active" || args.scope === "list") return { ...args, scope: "current" } as TaskQueryParamsType;
+  if (args.scope === "next") return { ...args, scope: "ready" } as TaskQueryParamsType;
+  return args as TaskQueryParamsType;
+}
 
 function statusIcon(status: TaskStatus): string {
   if (status === "completed") return "✔";
@@ -546,6 +709,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       "Use task_query with scope:'ready' for ready/unblocked work; prefer ready tasks in ID order and don't start blocked tasks.",
     ],
     parameters: TaskParams,
+    prepareArguments: prepareTaskArguments,
     renderShell: "self",
     async execute(_toolCallId, params: TaskParamsType, _signal, _onUpdate, ctx) {
       ensureStore(ctx);
@@ -654,6 +818,7 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       "Use after completing work or when resuming; set includeContext:true when you need durable task setup.",
     ],
     parameters: TaskQueryParams,
+    prepareArguments: prepareTaskQueryArguments,
     renderShell: "self",
     async execute(_toolCallId, params: TaskQueryParamsType, _signal, _onUpdate, ctx) {
       ensureStore(ctx);

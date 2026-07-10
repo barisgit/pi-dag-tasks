@@ -12,8 +12,16 @@ The system SHALL expose exactly one read tool named `task_query` that performs a
 - **THEN** the corresponding read is returned
 
 #### Scenario: Invalid scope is rejected
-- **WHEN** a caller invokes `task_query` with a scope other than ready, current, or history
+- **WHEN** a caller invokes `task_query` with a scope other than ready, current, history, or an unambiguous legacy alias
 - **THEN** the call fails validation
+
+### Requirement: Legacy scope preparation
+
+Before schema validation, `task_query` SHALL normalize the unambiguous legacy aliases `active` and `list` to `current`, and `next` to `ready`. Other scopes SHALL remain invalid.
+
+#### Scenario: Legacy scope aliases are normalized
+- **WHEN** a caller invokes `task_query` with `scope: "active"`, `scope: "list"`, or `scope: "next"`
+- **THEN** the corresponding canonical `current` or `ready` query is returned
 
 ### Requirement: ready scope
 
