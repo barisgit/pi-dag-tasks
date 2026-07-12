@@ -25,6 +25,20 @@ describe("two-tool schema rejection", () => {
   const taskSchema = tools.get("task").parameters;
   const querySchema = tools.get("task_query").parameters;
 
+  test("registered prompt guidance stays compact while preserving costly misuse guards", () => {
+    const taskGuidance = tools.get("task").promptGuidelines.join(" ");
+    const queryGuidance = tools.get("task_query").promptGuidelines.join(" ");
+
+    expect(taskGuidance.length).toBeLessThanOrEqual(1_200);
+    expect(queryGuidance.length).toBeLessThanOrEqual(250);
+
+    for (const required of ["batch-only", "task IDs", "in_progress", "durable setup", "verification", "scope:'ready'"]) {
+      expect(taskGuidance).toContain(required);
+    }
+    expect(queryGuidance).toContain("scope:'ready'");
+    expect(queryGuidance).toContain("includeContext:true");
+  });
+
   test("task accepts each valid mutation action", () => {
     for (const action of ["create", "update", "archive", "archive_all", "purge"]) {
       const input = action === "create" ? { action, creates: [{ title: "x" }] }
