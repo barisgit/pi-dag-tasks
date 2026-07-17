@@ -26,6 +26,8 @@ export interface TaskOperation {
   warnings?: string[];
 }
 
+export type ArchiveReason = "completed" | "selected";
+
 export interface DagTask {
   id: string;
   title: string;
@@ -33,19 +35,31 @@ export interface DagTask {
   context?: string;
   status: TaskStatus;
   activeForm?: string;
-  owner?: string;
   blocks: string[];
   blockedBy: string[];
   metadata: Record<string, unknown>;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
-  updatedAt: number;
+}
+
+export interface StoredDagTask {
+  title: string;
+  status: TaskStatus;
+  createdAt: number;
+  description?: string;
+  context?: string;
+  activeForm?: string;
+  blockedBy?: string[];
+  metadata?: Record<string, unknown>;
+  startedAt?: number;
+  completedAt?: number;
+  archived?: { at: number; reason: ArchiveReason };
 }
 
 export interface StoreData {
-  nextId: number;
-  tasks: DagTask[];
+  version: 1;
+  tasks: Record<string, StoredDagTask>;
 }
 
 /** Result details for the `task` mutation tool. */
@@ -70,12 +84,11 @@ export interface TaskQueryResultDetails {
 
 export interface ArchivedDagTask {
   archivedAt: number;
-  archiveReason: "completed" | "selected";
+  archiveReason: ArchiveReason;
   task: DagTask;
 }
 
 export interface DagTasksConfig {
-  taskScope?: "memory" | "session" | "project";
   autoArchiveCompleted?: "never" | "on_list_complete" | "on_task_complete";
   animateActiveTasks?: boolean;
 }

@@ -43,13 +43,13 @@ Both are pure view code: they read from `DagTaskStore`/`config` and from tool `d
 
 ## widget.ts
 
-**Responsibility:** `DagTaskWidget` — a persistent Pi-TUI status component (placement `aboveEditor`, order 20) showing live task progress: a compact `Tasks · X/Y done · K in_progress` header, per-task rows (icon + `#id` + title/activeForm, elapsed time for in-progress, "blocked by #x, #y" hints, strikethrough for completed), collapsing to a compact layout when the list exceeds 8 rows. Self-refreshes while any task is `in_progress` and clears itself when the list empties.
+**Responsibility:** `DagTaskWidget` — a persistent Pi-TUI status component (placement `aboveEditor`, order 20) showing live task progress: a compact `Tasks · X/Y done · A archived · K in_progress` header, per-task rows (icon + `#id` + title/activeForm, elapsed time for in-progress, "blocked by #x, #y" hints, strikethrough for completed), collapsing to a compact layout when the list exceeds 8 rows. Self-refreshes while any task is `in_progress`; when the current list empties, it remains visible as `Tasks · A archived`.
 
 **Key export:**
 - `class DagTaskWidget` — `constructor(store: DagTaskStore, config: () => DagTasksConfig = () => ({}))`.
   - `setStore(store)`, `setHost(host: WidgetHost)` — late-binding injectors (host exposes `setStatus(key, text)` + `widgets`).
   - `markActive(_id, _active)` — re-render trigger; effectively delegates to `update()`. Called by `src/index.ts` on every in_progress transition.
-  - `update()` — single refresh entry point: computes status string (`tasks N/M open · K in_progress` → `setStatus(WIDGET_KEY)`), registers the widget factory once, manages the animation timer, advances `frame`, requests a render. No-op until `host` is set.
+  - `update()` — single refresh entry point: computes status string (`tasks N/M open · A archived · K in_progress` → `setStatus(WIDGET_KEY)`), registers the widget factory once, manages the animation timer, advances `frame`, requests a render. No-op until `host` is set.
   - `dispose()` — stops timer, removes widget, clears status.
   - `private render(width, theme)` — full layout (≤ `MAX_BODY_ROWS`) or compact (>8: keeps `COMPACT_COMPLETED_ROWS=2` most-recent completed + all open, collapsing older open tasks into `+N open`).
   - `private renderTask(task, theme)` — row formatter: icon, id, title/activeForm, `formatDuration(displayNow - startedAt)` for in_progress, blocked-by hint, strikethrough for completed.
@@ -59,6 +59,6 @@ Both are pure view code: they read from `DagTaskStore`/`config` and from tool `d
 **Constants:** `WIDGET_KEY="dag-tasks"`, `WIDGET_PLACEMENT="aboveEditor"`, `WIDGET_ORDER=20`, `SPINNER` (11-glyph array; defined for in_progress-task animation), `MAX_BODY_ROWS=8`, `COMPACT_COMPLETED_ROWS=2`. **Interfaces:** `ThemeLike { fg, strikethrough }`, `WidgetHost { setStatus, widgets }`.
 
 **Integration points:**
-- Reads `DagTaskStore.list()` (`../store.js`) and `DagTasksConfig.animateActiveTasks` (`../types.js`) each refresh; writes the status line via `WidgetHost.setStatus` and registers itself through `UtilsClient["widgets"]` (`pi-extension-utils`).
+- Reads `DagTaskStore.list()`/`archivedCount()` (`../store.js`) and `DagTasksConfig.animateActiveTasks` (`../types.js`) each refresh; writes the status line via `WidgetHost.setStatus` and registers itself through `UtilsClient["widgets"]` (`pi-extension-utils`).
 - Lifecycle owned by `src/index.ts`: construct L356, `setStore` L396, `setHost` L407, `update` L409, `dispose` L478; `markActive` invoked across the `task` handler (L563, 576, 578, 581, 597, 606, 616) and the interactive command menu (L753–755).
 - Render output is plain pre-themed strings fed to Pi-TUI `truncateToWidth` per line.

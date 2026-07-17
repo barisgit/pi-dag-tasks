@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -58,7 +58,6 @@ const TaskCreateSchema = Type.Object({
   activeForm: Type.Optional(Type.String({ description: "Deprecated compatibility field for resumed task sessions." })),
   blockedBy: Type.Optional(Type.Array(Type.String())),
   blocks: Type.Optional(Type.Array(Type.String())),
-  owner: Type.Optional(Type.String()),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Any())),
 }, { additionalProperties: false });
 
@@ -69,7 +68,6 @@ const TaskUpdateSchema = Type.Object({
   context: Type.Optional(Type.String()),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed"] as const)),
   activeForm: Type.Optional(Type.String({ description: "Deprecated compatibility field for resumed task sessions." })),
-  owner: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Any())),
   addBlocks: Type.Optional(Type.Array(Type.String())),
   addBlockedBy: Type.Optional(Type.Array(Type.String())),
@@ -148,7 +146,6 @@ const topLevelUpdateFields = [
   "status",
   "activeForm",
   "inProgressForm",
-  "owner",
   "metadata",
   "addBlocks",
   "addBlockedBy",
@@ -532,30 +529,17 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
   }
 
   function refreshConfig(cwd: string): void {
-    delete cfg.taskScope;
     delete cfg.autoArchiveCompleted;
     delete cfg.animateActiveTasks;
     Object.assign(cfg, loadConfig(cwd));
   }
 
-  function resolveStorePath(ctx?: ExtensionContext): string | undefined {
-    const cwd = resolveCwd(ctx);
-    const env = process.env.PI_DAG_TASKS;
-    if (env === "off") return undefined;
-    if (env?.startsWith("/")) return env;
-    if (env?.startsWith(".")) return resolve(cwd, env);
-    if (env) return join(process.env.HOME ?? cwd, ".pi", "dag-tasks", `${env}.json`);
-    const scope = cfg.taskScope ?? "session";
-    if (scope === "memory") return undefined;
-    if (scope === "project") return join(cwd, ".pi", "dag-tasks", "tasks.json");
-    const sessionId = ctx?.sessionManager.getSessionId?.() ?? "session";
-    return join(cwd, ".pi", "dag-tasks", `tasks-${sessionId}.json`);
-  }
-
   function ensureStore(ctx: ExtensionContext): void {
     if (storeReady) return;
-    refreshConfig(resolveCwd(ctx));
-    store.setFilePath(resolveStorePath(ctx));
+    const cwd = resolveCwd(ctx);
+    const sessionId = ctx.sessionManager.getSessionId?.() ?? "session";
+    refreshConfig(cwd);
+    store.setFilePath(join(cwd, ".pi", "dag-tasks", `tasks-${sessionId}.json`));
     storeReady = true;
     widget.setStore(store);
   }
@@ -922,13 +906,6 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
       };
 
       const settings = async (): Promise<void> => {
-        const scope = await ctx.ui.select("Task storage", ["memory", "session", "project", "← Back"]);
-        if (scope && scope !== "← Back") {
-          cfg.taskScope = scope as "memory" | "session" | "project";
-          saveConfig(cfg, resolveCwd(ctx));
-          storeReady = false;
-          ensureStore(ctx);
-        }
         const autoArchiveChoice = await ctx.ui.select("Auto-archive completed", ["never", "on_list_complete", "on_task_complete", "← Back"]);
         if (autoArchiveChoice && autoArchiveChoice !== "← Back") {
           cfg.autoArchiveCompleted = autoArchiveChoice as "never" | "on_list_complete" | "on_task_complete";

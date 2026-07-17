@@ -8,7 +8,9 @@ export function configPath(cwd: string): string {
 
 export function loadConfig(cwd: string): DagTasksConfig {
   try {
-    return JSON.parse(readFileSync(configPath(cwd), "utf8")) as DagTasksConfig;
+    const config = JSON.parse(readFileSync(configPath(cwd), "utf8")) as DagTasksConfig & { taskScope?: unknown };
+    delete config.taskScope;
+    return config;
   } catch {
     return {};
   }

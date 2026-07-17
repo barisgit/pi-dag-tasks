@@ -38,6 +38,25 @@ describe("DagTaskWidget", () => {
     expect(render(widget)[0]).toBe(" Tasks · 1/2 done · 1 in_progress");
   });
 
+  test("shows the cumulative archived task count", () => {
+    const store = new DagTaskStore();
+    const archived = store.create({ title: "Archived", status: "completed" }).task;
+    store.create({ title: "Current" });
+    store.archive([archived.id]);
+    const widget = new DagTaskWidget(store);
+
+    expect(render(widget)[0]).toBe(" Tasks · 0/1 done · 1 archived");
+  });
+
+  test("keeps the archived total visible when no current tasks remain", () => {
+    const store = new DagTaskStore();
+    const task = store.create({ title: "Archived" }).task;
+    store.archive([task.id]);
+    const widget = new DagTaskWidget(store);
+
+    expect(render(widget)[0]).toBe(" Tasks · 1 archived");
+  });
+
   test("renders completed task text dim while keeping the checkmark successful", () => {
     const store = new DagTaskStore();
     store.create({ title: "Done", status: "completed" });

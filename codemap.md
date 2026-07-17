@@ -1,7 +1,7 @@
 # Repository Atlas: pi-dag-tasks
 
 ## Project Responsibility
-A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single task/todo tracker: exposes exactly two LLM-callable tools — `task` (all mutations, batch-only) and `task_query` (all reads, scope-based) — backed by an optional file-persisted store with dependency edges (blocks/blockedBy), a persistent TUI status widget, periodic state reminders, turn-delayed auto-archive of completed work, and an interactive `/tasks` command. Working memory for the in_progress execution slice; not a roadmap/milestone planner (that's `pi-charter`).
+A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single task/todo tracker: exposes exactly two LLM-callable tools — `task` (all mutations, batch-only) and `task_query` (all reads, scope-based) — backed by a per-session file store with dependency edges (blocks/blockedBy), a persistent TUI status widget, periodic state reminders, turn-delayed auto-archive of completed work, and an interactive `/tasks` command. Working memory for the in_progress execution slice; not a roadmap/milestone planner (that's `pi-charter`).
 
 ## System Entry Points
 - `src/index.ts` — sole extension export (`export default dagTasksExtension(pi)`); registers the two tools, the `/tasks` command, lifecycle event handlers, the reminder system, and the widget.
@@ -26,11 +26,11 @@ A lean **DAG task manager extension** for the Pi coding agent. It is Pi's single
 - `pi-extension-utils` — `connect` (utils client: reminders, widgets), logger, widget coordinator.
 
 ## Persistence Layout
-File-backed (resolved via `PI_DAG_TASKS` env or `cfg.taskScope` `memory`/`session`/`project`):
-- `.pi/dag-tasks/tasks-<sessionId>.json` (session, default) / `tasks.json` (project) — in_progress tasks + `nextId`.
-- `.pi/dag-tasks/archive.jsonl` — appended on archive; `history` scope reads this. **Memory mode (`PI_DAG_TASKS=off`/scope `memory`) persists nothing — archiving and history are file-backed only.**
-- `.pi/dag-tasks/dag-tasks-config.json` — `taskScope`, `autoArchiveCompleted`, `animateActiveTasks`.
-- Writes: atomic `tmp`+`rename` under a PID-stale `.lock` (40ms×125 retry).
+Each session owns one versioned file:
+- `.pi/dag-tasks/tasks-<sessionId>.json` — `{version: 1, tasks: Record<id, task>}` containing active and archived records; IDs derive from the highest key.
+- Archived records carry `archived: {at, reason}` in the same task object. There is no shared archive or project/global/custom-path mode.
+- `.pi/dag-tasks/dag-tasks-config.json` — `autoArchiveCompleted`, `animateActiveTasks`.
+- Legacy task arrays migrate on the next mutation; unsupported files are backed up. Writes use atomic `tmp`+`rename` under a PID-stale `.lock` (40ms×125 retry).
 
 ## Specification (OpenSpec)
 - `openspec/specs/task-mutations/spec.md` — 7 requirements defining the `task` tool contract.

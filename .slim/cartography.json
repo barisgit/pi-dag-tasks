@@ -1,7 +1,7 @@
 {
   "metadata": {
     "version": "1.0.0",
-    "last_run": "2026-06-22T22:12:00.575255Z",
+    "last_run": "2026-07-17T16:17:14.080463Z",
     "root": "/Users/blaz/Programming_local/Projects/pi-extensions/pi-dag-tasks",
     "include_patterns": [
       "src/**/*.ts"
@@ -18,16 +18,16 @@
   },
   "file_hashes": {
     "src/auto-clear.ts": "e50cbdb14b64d6306f097da69ea98a6c",
-    "src/config.ts": "c11bd2882ed84278caa84bfe62b0e8a1",
-    "src/index.ts": "1cbc6ce93c67fb6fcf729fa4719f0f8c",
-    "src/store.ts": "a469e85d7467d10b12cc639e5b50530b",
-    "src/types.ts": "9c90cb9f43b4e63168e7769eb3eb1cba",
-    "src/ui/tool-render.ts": "74546ffed6ab8fd63dd1da99d27a5569",
-    "src/ui/widget.ts": "3201aa3531dd41391c9f5c4a4720e107"
+    "src/config.ts": "7adb4fd776a49e5222ecec90217a4776",
+    "src/index.ts": "69fc2bcb9bfee770f155bd92e1f0bc19",
+    "src/store.ts": "14582cf9d4e503a67a0535aa60e40f56",
+    "src/types.ts": "53ab92611ff52ae5192b5de72af099b7",
+    "src/ui/tool-render.ts": "5053a6c4794cb0016eb6d7d2e2598b89",
+    "src/ui/widget.ts": "bec0a7cbd1ebe975807e0e067fdd7ef2"
   },
   "folder_hashes": {
-    "src": "cf453166443b5759e9a8f75010c2b10a",
-    ".": "",
-    "src/ui": "c964bf86cc554d09e3760f0772e9f0fd"
+    "src": "2931de25e52ed73cb8e0f8e857c117a8",
+    "src/ui": "d21af2768eec395d23a1534f34b1d7d0",
+    ".": ""
   }
 }

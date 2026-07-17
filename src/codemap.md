@@ -1,7 +1,7 @@
 # src/
 
 ## Responsibility
-Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for the Pi coding agent. It exposes exactly two LLM tools — `task` (mutations) and `task_query` (reads) — backed by an optional file-persisted store (memory, per-session, or per-project), plus a status-line widget, a periodic state reminder, auto-archive of completed work, and an interactive `/tasks` command.
+Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for the Pi coding agent. It exposes exactly two LLM tools — `task` (mutations) and `task_query` (reads) — backed by a per-session file store, plus a status-line widget, a periodic state reminder, auto-archive of completed work, and an interactive `/tasks` command.
 
 ## Design
 - **Two-tool contract.** All mutations funnel through `task` (`create`/`update`/`archive`/`archive_all`/`purge`, batch-only via `creates[]`/`updates[]`/`ids[]`); all reads funnel through `task_query` (`scope` = `ready`/`current`/`history`). No singular mutation fields.
@@ -12,7 +12,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 
 ## Flow
 1. Extension loads (`dagTasksExtension`) → in-memory `DagTaskStore` created; config/store path resolved lazily.
-2. `session_start`/`context`/`turn_start` → `ensureStore(ctx)` resolves scope (env `PI_DAG_TASKS`, else `cfg.taskScope` `memory`/`session`/`project`) and calls `store.setFilePath(...)`.
+2. `session_start`/`context`/`turn_start` → `ensureStore(ctx)` selects `.pi/dag-tasks/tasks-{sessionId}.json` and calls `store.setFilePath(...)`.
 3. `turn_start` → `autoArchive.onTurnStart()` may archive completed tasks after a turn delay; `publishTaskReminder()` may push a state reminder.
 4. `tool_call`/`tool_result` for `task`/`task_query` → `suppressTaskReminder()` (cooldown). `task` completions call `autoArchive.trackCompletion()`.
 5. `task` execute → dispatch by `action` → `store.create/update/archive/archiveCompleted/purge`, accumulate `TaskOperation[]` + unblock detection, append `buildTaskManageGuidance`, refresh UI.
@@ -23,7 +23,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 - Registered with Pi via `export default dagTasksExtension(pi: ExtensionAPI)` in `src/index.ts`.
 - External deps: `@earendil-works/pi-coding-agent` (`ExtensionAPI`, contexts), `@earendil-works/pi-ai` (`StringEnum`), `typebox` (`Type`), `pi-extension-utils` (`connect`, `createLogger`, `UtilsClient`, `ReminderIntent`).
 - UI: `src/ui/tool-render.ts` (call/result renderers) and `src/ui/widget.ts` (`DagTaskWidget`) — own `src/ui/codemap.md`.
-- Persistence: `.pi/dag-tasks/tasks-{sessionId}.json` (session), `.pi/dag-tasks/tasks.json` (project), `.pi/dag-tasks/archive.jsonl`, `.pi/dag-tasks/dag-tasks-config.json`. Override via `PI_DAG_TASKS` env (`off`/relative/absolute/`name`).
+- Persistence: each session owns one versioned `.pi/dag-tasks/tasks-{sessionId}.json` containing active and archived records; settings live in `.pi/dag-tasks/dag-tasks-config.json`.
 - Also exported as a Pi skill (`skills/openspec-*` and `pi-dag-tasks/skills` reference the same tools).
 
 ---
@@ -49,26 +49,23 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 **Dependencies:** `./store.js` (`DagTaskStore`, `TaskPatch`), `./auto-clear.js` (`AutoArchiveManager`), `./config.js`, `./types.js`, `./ui/tool-render.js`, `./ui/widget.js`.
 
 ### `src/store.ts`
-**Responsibility:** `DagTaskStore` — the data access layer. In-memory or file-backed task persistence, sequential ID allocation, bidirectional DAG edge management with cycle detection, archiving (JSONL append), and a stale-PID file lock. Knows nothing about Pi.
+**Responsibility:** `DagTaskStore` — the data access layer. Persists each session's active and archived tasks in one versioned JSON file, derives IDs and reverse DAG edges, handles legacy migration, and coordinates writes with a stale-PID file lock. Knows nothing about Pi.
 
 **Key exports:**
-- `export class DagTaskStore` (~L57) — the store.
-- `export interface TaskPatch` (L47) — update payload: `id` + optional `title`/`description`/`context`/`status`/`activeForm` (internal legacy storage/display only)/`owner`/`metadata` and edge deltas `addBlocks`/`addBlockedBy`/`removeBlocks`/`removeBlockedBy`. (Note: defined here, **not** in `types.ts`.)
+- `export class DagTaskStore` — the store.
+- `export interface TaskPatch` — update payload: `id` + optional task fields and edge deltas `addBlocks`/`addBlockedBy`/`removeBlocks`/`removeBlockedBy`.
 
 **Public API:**
-- `constructor(filePath?)` — if set, configures `lockPath = ${filePath}.lock`, `archivePath = ${dir}/archive.jsonl`, and `load()`s.
-- `setFilePath(filePath?)` — reconfigure paths, reset, reload (used by `ensureStore`).
-- `list()` → `DagTask[]` (sorted by numeric id; reloads if file-backed), `get(id)`.
-- `create(input)` → `{task, warnings[]}` (auto-sets `startedAt`/`completedAt`).
-- `update(patch)` → `{task?, changed[], warnings[]}` (status transitions, metadata merge/null-delete, edge add/remove).
-- `archive(ids, reason="selected")` → count (appends to archive, removes dangling edges).
-- `archiveCompleted()` → archives all `completed` with reason `completed`.
-- `purge(ids)` → count (no archive record; removes dangling edges).
-- `history(limit=20, query?)` → `ArchivedDagTask[]` newest-first, query filters title/description/context.
-- `ready()` → pending tasks with no open blockers; `openBlockers(task)` → `blockedBy` not completed.
-- `deleteFileIfEmpty()` — removes the (now empty) store file.
+- `constructor(filePath?)` / `setFilePath(filePath?)` — configure and load the session file.
+- `list()` / `get(id)` return active tasks; `archivedCount()` counts archived records.
+- `create(input)` derives the next ID from all stored keys and sets lifecycle timestamps.
+- `update(patch)` applies status, metadata, and dependency changes.
+- `archive(ids, reason)` marks records with `archived: {at, reason}`; `archiveCompleted()` archives completed tasks.
+- `purge(ids)` permanently removes active records; `history(limit, query?)` returns archived records newest-first.
+- `ready()` / `openBlockers(task)` expose executable DAG work.
+- `deleteFileIfEmpty()` removes only a truly empty file, retaining archive-only session files.
 
-**Internals:** `load`/`save` (atomic tmp+rename), `withLock(fn)` (load→fn→save→unlock), `appendArchive`, `removeDanglingEdges`, `applyEdges` (cycle check, self-block, missing-dep warnings), `hasPath` (DFS reachability), `removeEdges`. Module-level `acquireLock`/`releaseLock`/`isProcessRunning`/`sleepSync` (retry 40ms × 125, stale-PID reaping via `process.kill(pid,0)`).
+**Internals:** Version 1 stores tasks in an ID-keyed object without duplicated `id`, `nextId`, `blocks`, `owner`, or `updatedAt`. Legacy `{nextId,tasks[]}` files load and rewrite on the next mutation. Unknown/malformed files are renamed to `.unsupported-*`. `blockedBy` is canonical and `blocks` is derived. `load`/`save` use atomic rename; `withLock` serializes mutations.
 
 **Dependencies:** `node:fs`, `node:path`, `./types.js`.
 
@@ -76,14 +73,11 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 **Responsibility:** Shared type definitions for the whole extension. No runtime code.
 
 **Key exports (types):**
-- Status/action enums: `TaskStatus` (`pending`|`in_progress`|`completed`), `TaskMutationAction`, `TaskQueryScope`, `TaskOperationKind`.
-- `TaskOperation` (`kind`/`id`/`title`/`count`/`total`/`changed`/`warnings`) — per-action result unit returned by the `task` tool.
-- `interface DagTask` — the core record (`id`, `title`, `description`, `context?`, `status`, `activeForm?`, `owner?`, `blocks[]`, `blockedBy[]`, `metadata`, `createdAt`, `startedAt?`, `completedAt?`, `updatedAt`).
-- `StoreData` (`{nextId, tasks[]}`) — on-disk JSON shape.
-- `TaskResultDetails` (`action?`, `operations[]`, `tasks?`, `guidance?`) — `task` tool structured result.
-- `TaskQueryResultDetails` (`scope`, `ready?`/`inProgress?`/`blocked?`/`tasks?`/`history?`, `completedCount?`, `totalCount?`) — `task_query` structured result (fields vary by scope).
-- `ArchivedDagTask` (`archivedAt`, `archiveReason` `completed`|`selected`, `task`).
-- `DagTasksConfig` (`taskScope?`, `autoArchiveCompleted?`, `animateActiveTasks?`) — on-disk config.
+- Status/action enums: `TaskStatus`, `TaskMutationAction`, `TaskQueryScope`, `TaskOperationKind`.
+- `DagTask` — public hydrated task record with derived `id` and `blocks`.
+- `StoredDagTask` — compact persisted fields with optional `archived: {at, reason}`.
+- `StoreData` — version 1 `{version: 1, tasks: Record<string, StoredDagTask>}`.
+- `TaskResultDetails`, `TaskQueryResultDetails`, `ArchivedDagTask`, `DagTasksConfig`.
 
 **Dependencies:** none (pure types).
 

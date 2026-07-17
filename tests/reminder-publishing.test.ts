@@ -69,9 +69,11 @@ function createMockPi() {
   return { handlers, tools, emitted };
 }
 
+let taskTestCwd = process.cwd();
+
 function createContext() {
   return {
-    cwd: process.cwd(),
+    cwd: taskTestCwd,
     hasUI: false,
     sessionManager: {
       getSessionId: () => "test-session",
@@ -79,18 +81,19 @@ function createContext() {
   } as any;
 }
 
-async function withMemoryTasks<T>(fn: () => Promise<T> | T): Promise<T> {
-  const previous = process.env.PI_DAG_TASKS;
+async function withSessionTasks<T>(fn: () => Promise<T> | T): Promise<T> {
+  const previousCwd = taskTestCwd;
   const previousMs = process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS;
-  process.env.PI_DAG_TASKS = "off";
+  const tempCwd = mkdtempSync(join(tmpdir(), "pi-dag-tasks-reminder-"));
+  taskTestCwd = tempCwd;
   process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS = "0";
   try {
     return await fn();
   } finally {
-    if (previous === undefined) delete process.env.PI_DAG_TASKS;
-    else process.env.PI_DAG_TASKS = previous;
     if (previousMs === undefined) delete process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS;
     else process.env.PI_DAG_TASKS_REMINDER_FORGOTTEN_MS = previousMs;
+    rmSync(tempCwd, { recursive: true, force: true });
+    taskTestCwd = previousCwd;
   }
 }
 
@@ -116,7 +119,7 @@ function reminderEvents(emitted: EmittedEvent[], name: string): EmittedEvent[] {
 
 describe("task reminder publishing", () => {
   test("publishes compact persistent reminder intent instead of mutating context messages", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
       await createTask(tools, ctx, "Ship reminders", "Very long in_progress context should not be emitted into the volatile reminder trailer.");
@@ -149,7 +152,7 @@ describe("task reminder publishing", () => {
   });
 
   test("removes reminder when there are no tasks", async () => {
-    await withMemoryTasks(() => {
+    await withSessionTasks(() => {
       const { handlers, emitted } = createMockPi();
       const ctx = createContext();
 
@@ -167,7 +170,7 @@ describe("task reminder publishing", () => {
   });
 
   test("unchanged task reminders are not re-upserted before repeat interval", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
       await createTask(tools, ctx);
@@ -187,7 +190,7 @@ describe("task reminder publishing", () => {
   });
 
   test("task tool calls remove cached reminders and suppress five turns", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
       await createTask(tools, ctx);
@@ -220,7 +223,7 @@ describe("task reminder publishing", () => {
   });
 
   test("complete via update then archive_all clears the list in one sweep", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { tools, handlers } = createMockPi();
       const ctx = createContext();
       const tool = tools.get("task");
@@ -240,7 +243,7 @@ describe("task reminder publishing", () => {
   });
 
   test("task mutations do not immediately announce reminders during tool chains", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { tools, emitted } = createMockPi();
       const ctx = createContext();
       const tool = tools.get("task");
@@ -252,7 +255,7 @@ describe("task reminder publishing", () => {
   });
 
   test("unrelated tool results do not suppress reminder publishing", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       const { handlers, tools, emitted } = createMockPi();
       const ctx = createContext();
       await createTask(tools, ctx);
@@ -267,7 +270,7 @@ describe("task reminder publishing", () => {
   });
 
   test("writes cache-relevant reminder decision debug records", async () => {
-    await withMemoryTasks(async () => {
+    await withSessionTasks(async () => {
       await withDebugLog(async (debugLogPath) => {
         const { handlers, tools } = createMockPi();
         const ctx = createContext();

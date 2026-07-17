@@ -60,11 +60,14 @@ export class DagTaskWidget {
   update(): void {
     if (!this.host) return;
     const tasks = this.store.list();
+    const archived = this.store.archivedCount();
     const open = tasks.filter((task) => task.status !== "completed").length;
     const inProgress = tasks.filter((task) => task.status === "in_progress").length;
-    this.host.setStatus(WIDGET_KEY, tasks.length ? `tasks ${tasks.length}/${open} open${inProgress ? ` · ${inProgress} in_progress` : ""}` : undefined);
+    this.host.setStatus(WIDGET_KEY, tasks.length
+      ? `tasks ${tasks.length}/${open} open${archived ? ` · ${archived} archived` : ""}${inProgress ? ` · ${inProgress} in_progress` : ""}`
+      : archived ? `tasks ${archived} archived` : undefined);
 
-    if (tasks.length === 0) {
+    if (tasks.length === 0 && archived === 0) {
       if (this.registered) {
         this.host.widgets.remove(WIDGET_PLACEMENT, WIDGET_KEY);
         this.registered = false;
@@ -111,12 +114,15 @@ export class DagTaskWidget {
   private render(width: number, theme: ThemeLike): string[] {
     const truncate = (line: string) => truncateToWidth(line, width);
     const tasks = this.store.list();
-    if (tasks.length === 0) return [];
+    const archived = this.store.archivedCount();
+    if (tasks.length === 0 && archived === 0) return [];
     const completed = tasks.filter((task) => task.status === "completed");
     const openTasks = tasks.filter((task) => task.status !== "completed");
     const inProgress = openTasks.filter((task) => task.status === "in_progress").length;
     const compact = tasks.length > MAX_BODY_ROWS;
-    const header = `Tasks · ${completed.length}/${tasks.length} done${inProgress ? ` · ${inProgress} in_progress` : ""}`;
+    const header = tasks.length
+      ? `Tasks · ${completed.length}/${tasks.length} done${archived ? ` · ${archived} archived` : ""}${inProgress ? ` · ${inProgress} in_progress` : ""}`
+      : `Tasks · ${archived} archived`;
     const lines = [truncate(` ${theme.fg("accent", header)}`)];
     if (!compact) {
       for (const task of tasks) lines.push(truncate(this.renderTask(task, theme)));
@@ -125,7 +131,7 @@ export class DagTaskWidget {
 
     const recentCompletedIds = new Set(completed
       .slice()
-      .sort((a, b) => ((b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt)) || (Number(b.id) - Number(a.id)))
+      .sort((a, b) => ((b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt)) || (Number(b.id) - Number(a.id)))
       .slice(0, COMPACT_COMPLETED_ROWS)
       .map((task) => task.id));
     const visibleTasks = tasks.filter((task) => task.status !== "completed" || recentCompletedIds.has(task.id));

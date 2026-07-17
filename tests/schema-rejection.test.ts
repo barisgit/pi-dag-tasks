@@ -39,6 +39,11 @@ describe("two-tool schema rejection", () => {
     expect(queryGuidance).toContain("includeContext:true");
   });
 
+  test("task no longer accepts unused owner fields", () => {
+    expect(Value.Check(taskSchema, { action: "create", creates: [{ title: "x", owner: "agent" }] })).toBe(false);
+    expect(Value.Check(taskSchema, { action: "update", updates: [{ id: "1", owner: null }] })).toBe(false);
+  });
+
   test("task accepts each valid mutation action", () => {
     for (const action of ["create", "update", "archive", "archive_all", "purge"]) {
       const input = action === "create" ? { action, creates: [{ title: "x" }] }

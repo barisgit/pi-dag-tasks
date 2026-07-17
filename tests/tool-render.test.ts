@@ -26,7 +26,6 @@ function task(id: string, title: string, status: DagTask["status"], patch: Parti
     blockedBy: [],
     metadata: {},
     createdAt: 1,
-    updatedAt: 1,
     ...patch,
   };
 }

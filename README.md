@@ -12,8 +12,8 @@ Only two LLM-callable tools are exposed:
 
 - `task` — all mutations. Batch-only inputs; each action reads exactly one field.
   - actions: `create`, `update`, `archive`, `archive_all`, `purge`
-  - `create` → `creates: [{ title, status?, blockedBy?, blocks?, context?, owner?, metadata?, activeForm? }]`
-  - `update` → `updates: [{ id, status?, title?, context?, owner?, metadata?, activeForm?, addBlockedBy?, addBlocks?, removeBlockedBy?, removeBlocks? }]` — `id` is required in every entry
+  - `create` → `creates: [{ title, status?, blockedBy?, blocks?, context?, metadata?, activeForm? }]`
+  - `update` → `updates: [{ id, status?, title?, context?, metadata?, activeForm?, addBlockedBy?, addBlocks?, removeBlockedBy?, removeBlocks? }]` — `id` is required in every entry
   - `archive` / `purge` → `ids: ["1", "2"]`
   - `archive_all` → no arguments (archives every completed task)
   - completing a task is `update` with `status: "completed"`; there is no separate `complete` action
@@ -92,12 +92,13 @@ Use the smallest task list that preserves quality:
 Inspired by `tintinweb/pi-tasks`, but smaller:
 
 - persistent widget above the editor
-- compact header: `Tasks · M/N done · X in_progress`
+- compact header: `Tasks · M/N done · A archived · X in_progress`
 - status icons: `✔` completed, `◼` in progress, `◻` pending, `◫` blocked
 - strikethrough completed items
 - static in-progress rows with elapsed time by default; optional spinner animation via config
 - compact mode preserves task order, drops completed rows from the body first, then appends `+N open` if unfinished rows still do not fit
 - compact footer status
+- cumulative archived count remains visible even when the current list is empty
 - `/tasks` interactive command for view/create/archive/history/settings; archived tasks are viewable even when no in_progress tasks remain
 
 ## Task context
@@ -124,26 +125,29 @@ When all tasks are complete, the reminder nudges verification before finalizatio
 
 ## Storage
 
-Config file: `.pi/dag-tasks/dag-tasks-config.json`
+Each session has one `.pi/dag-tasks/tasks-<sessionId>.json` file containing both active and archived tasks:
 
-Storage modes:
+```json
+{
+  "version": 1,
+  "tasks": {
+    "1": {
+      "title": "Example",
+      "status": "completed",
+      "createdAt": 1784300000000,
+      "archived": { "at": 1784300200000, "reason": "completed" }
+    }
+  }
+}
+```
 
-- `memory` — no files
-- `session` — `.pi/dag-tasks/tasks-<sessionId>.json` default
-- `project` — `.pi/dag-tasks/tasks.json`
+Task IDs are object keys and the next ID is derived from the highest stored ID. Archived tasks remain in the same session file and are identified by the optional `archived` object; `task_query` with `scope: "history"` returns them newest-first. Purging permanently removes records, so purging every task allows IDs to restart at `1`.
 
-Widget animation is disabled by default. Set `animateActiveTasks: true` in the config file to animate in-progress task icons; static in-progress tasks still show elapsed time from the persisted `startedAt` timestamp.
+Legacy `{ nextId, tasks: [...] }` session files load automatically and are rewritten as version 1 on the next mutation. Malformed files and unknown versions are renamed to a timestamped `.unsupported-*` backup before the session starts fresh.
 
-Archived tasks are appended to `.pi/dag-tasks/archive.jsonl` and are available through `task_query` with `scope: "history"`. History is shown newest-first with archive time and reason (`manual archive` or `completed sweep`). Archived context is hidden by default; pass `includeContext: true` for detailed history.
+There are no project-wide, global, memory, or custom-path storage modes. Files use a lock and atomic rename writes.
 
-Override with `PI_DAG_TASKS`:
-
-- `off` — memory mode
-- `name` — `~/.pi/dag-tasks/name.json`
-- `/abs/path.json` — explicit file
-- `./relative.json` — relative to cwd
-
-File-backed modes use a simple lock file and atomic rename writes.
+Config file: `.pi/dag-tasks/dag-tasks-config.json` (auto-archive and widget animation only). Widget animation is disabled by default; set `animateActiveTasks: true` to animate in-progress task icons.
 
 ## Install/dev
 
