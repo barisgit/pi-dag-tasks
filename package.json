@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pi-extension-utils": "^0.7.4"
+    "pi-extension-utils": "^0.7.6"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
