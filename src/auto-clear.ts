@@ -34,9 +34,9 @@ export class AutoArchiveManager {
         const task = store.get(id);
         if (!task || task.status !== "completed") this.completedAtTurn.delete(id);
         else if (currentTurn - turn >= this.delayTurns) {
-          store.archive([id]);
+          const count = store.archiveCompleted([id], "selected");
           this.completedAtTurn.delete(id);
-          archived = true;
+          archived = count > 0 || archived;
         }
       }
     } else if (this.allCompletedAtTurn !== null && currentTurn - this.allCompletedAtTurn >= this.delayTurns) {

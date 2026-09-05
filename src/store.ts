@@ -253,23 +253,29 @@ export class DagTaskStore {
   }
 
   archive(ids: string[], reason: ArchivedDagTask["archiveReason"] = "selected"): number {
+    return this.withLock(() => this.archiveTasks(ids, reason));
+  }
+
+  archiveCompleted(ids?: string[], reason: ArchivedDagTask["archiveReason"] = "completed"): number {
     return this.withLock(() => {
-      let count = 0;
-      const archivedAt = Date.now();
-      for (const id of ids) {
-        const task = this.activeTask(id);
-        if (!task) continue;
-        task.archived = { at: archivedAt, reason };
-        count++;
-      }
-      this.removeDanglingEdges();
-      return count;
+      const completedIds = [...this.tasks.values()]
+        .filter((task) => !task.archived && task.status === "completed" && (ids === undefined || ids.includes(task.id)))
+        .map((task) => task.id);
+      return this.archiveTasks(completedIds, reason);
     });
   }
 
-  archiveCompleted(): number {
-    const ids = this.list().filter((task) => task.status === "completed").map((task) => task.id);
-    return this.archive(ids, "completed");
+  private archiveTasks(ids: string[], reason: ArchivedDagTask["archiveReason"]): number {
+    let count = 0;
+    const archivedAt = Date.now();
+    for (const id of ids) {
+      const task = this.activeTask(id);
+      if (!task) continue;
+      task.archived = { at: archivedAt, reason };
+      count++;
+    }
+    this.removeDanglingEdges();
+    return count;
   }
 
   purge(ids: string[]): number {

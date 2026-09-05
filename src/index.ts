@@ -699,13 +699,13 @@ export default function dagTasksExtension(pi: ExtensionAPI): void {
         if (inputs.length === 0) throw new Error("creates is required");
         for (const input of inputs) {
           const { task, warnings } = store.create(input);
+          autoArchive.resetBatchCountdown();
           if (task.status === "in_progress") widget.markActive(task.id, true);
           if (task.status === "completed") autoArchive.trackCompletion(task.id, currentTurn);
           const kind = task.status === "in_progress" ? "started" : task.status === "completed" ? "completed" : "created";
           operations.push({ kind, id: task.id, title: task.title, warnings });
           lines.push(`Created #${task.id}: ${task.title}${task.status !== "pending" ? ` [${task.status}]` : ""}${warnings.length ? ` (warning: ${warnings.join("; ")})` : ""}`);
         }
-        autoArchive.resetBatchCountdown();
       } else if (params.action === "update") {
         const updates = params.updates ?? [];
         if (updates.length === 0) throw new Error("updates is required");

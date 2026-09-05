@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -165,6 +166,44 @@ describe("DagTaskStore", () => {
     expect(count).toBe(2);
     // Only completed tasks are swept; the open one remains.
     expect(store.list().map((t) => t.title)).toEqual(["Open"]);
+  });
+
+  test("archiveCompleted selects the latest statuses under the mutation lock", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-dag-tasks-archive-reopen-"));
+    const taskFile = join(root, "tasks.json");
+    const store = new DagTaskStore(taskFile);
+    const peer = new DagTaskStore(taskFile);
+    const write = fs.writeFileSync;
+    let interleaved = false;
+    let lockWrite: ReturnType<typeof spyOn> | undefined;
+    try {
+      store.create({ title: "Reopened", status: "completed" });
+      store.create({ title: "Still done", status: "completed" });
+      store.create({ title: "Newly done" });
+      store.create({ title: "Blocked", blockedBy: ["2"] });
+      // Schedule a second store's commit immediately before the archive lock
+      // is acquired. No private store hooks or timing-dependent sleeps.
+      lockWrite = spyOn(fs, "writeFileSync").mockImplementation((path, data, options) => {
+        if (path === `${taskFile}.lock` && !interleaved) {
+          interleaved = true;
+          peer.update({ id: "1", status: "pending" });
+          peer.update({ id: "3", status: "completed" });
+        }
+        return write(path, data, options);
+      });
+      expect(store.archiveCompleted()).toBe(2);
+      expect(interleaved).toBe(true);
+      expect(peer.list().map((task) => [task.id, task.status])).toEqual([["1", "pending"], ["4", "pending"]]);
+      expect(peer.get("4")?.blockedBy).toEqual([]);
+      expect(peer.history().map((entry) => [entry.task.id, entry.archiveReason])).toEqual([["3", "completed"], ["2", "completed"]]);
+      expect(existsSync(`${taskFile}.lock`)).toBe(false);
+      // Explicit selection can still archive unfinished work.
+      expect(store.archive(["1"])).toBe(1);
+      expect(peer.history().find((entry) => entry.task.id === "1")?.archiveReason).toBe("selected");
+    } finally {
+      lockWrite?.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("archiveCompleted records archived tasks to history when file-backed", () => {
