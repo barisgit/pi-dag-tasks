@@ -1,5 +1,5 @@
 import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
-import type { UtilsClient } from "pi-extension-utils";
+import type { UtilsClient } from "pi-extension-utils/pi";
 import type { DagTaskStore } from "../store.js";
 import type { DagTasksConfig } from "../types.js";
 

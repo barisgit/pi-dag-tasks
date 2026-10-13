@@ -3,13 +3,14 @@ import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+// Keep utils on Pi's TypeScript loader path so its imports reuse the host aliases.
 import {
   connect,
   createLogger,
   type Logger,
   type ReminderIntent,
   type UtilsClient,
-} from "pi-extension-utils";
+} from "pi-extension-utils/pi";
 import { AutoArchiveManager } from "./auto-clear.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { DagTaskStore, type TaskPatch } from "./store.js";

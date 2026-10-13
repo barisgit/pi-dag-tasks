@@ -21,7 +21,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 
 ## Integration
 - Registered with Pi via `export default dagTasksExtension(pi: ExtensionAPI)` in `src/index.ts`.
-- External deps: `@earendil-works/pi-coding-agent` (`ExtensionAPI`, contexts), `@earendil-works/pi-ai` (`StringEnum`), `typebox` (`Type`), `pi-extension-utils` (`connect`, `createLogger`, `UtilsClient`, `ReminderIntent`).
+- External deps: `@earendil-works/pi-coding-agent` (`ExtensionAPI`, contexts), `@earendil-works/pi-ai` (`StringEnum`), `typebox` (`Type`), `pi-extension-utils/pi` (`connect`, `createLogger`, `UtilsClient`, `ReminderIntent`).
 - UI: `src/ui/tool-render.ts` (call/result renderers) and `src/ui/widget.ts` (`DagTaskWidget`) — own `src/ui/codemap.md`.
 - Persistence: each session owns one versioned `.pi/dag-tasks/tasks-{sessionId}.json` containing active and archived records; settings live in `.pi/dag-tasks/dag-tasks-config.json`.
 - Also exported as a Pi skill (`skills/openspec-*` and `pi-dag-tasks/skills` reference the same tools).
