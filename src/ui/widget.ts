@@ -38,14 +38,15 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
+/** Read-only task projection: mutation snapshots feed disk-free renders and animation. */
 export class DagTaskWidget {
   private host?: WidgetHost;
   private frame = 0;
   private interval?: ReturnType<typeof setInterval>;
   private tui?: TUI;
   private registered = false;
-  // Timestamp used for elapsed-time display, refreshed only on update() so that
-  // incidental TUI re-renders (e.g. the loader spinner) do not tick it per-second.
+  // Explicit updates and animation/time ticks advance elapsed time; incidental
+  // TUI redraws (e.g. the loader spinner) keep the previous timestamp.
   private displayNow = Date.now();
 
   private tasks: ReturnType<DagTaskStore["list"]> = [];
