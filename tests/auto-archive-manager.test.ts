@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AutoArchiveManager } from "../src/auto-clear.js";
-import { DagTaskStore } from "../src/store.js";
+import { AutoArchiveManager } from "../src/auto-clear.ts";
+import { DagTaskStore } from "../src/store.ts";
 
 test("per-task autoarchive preserves work reopened before the mutation lock", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-dag-tasks-per-task-reopen-"));

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { DagTasksConfig } from "./types.js";
+import type { DagTasksConfig } from "./types.ts";
 
 export function configPath(cwd: string): string {
   return join(cwd, ".pi", "dag-tasks", "dag-tasks-config.json");

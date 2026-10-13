@@ -1,7 +1,7 @@
 import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { UtilsClient } from "pi-extension-utils/pi";
-import type { DagTaskStore } from "../store.js";
-import type { DagTasksConfig } from "../types.js";
+import type { DagTaskStore } from "../store.ts";
+import type { DagTasksConfig } from "../types.ts";
 
 interface ThemeLike {
   fg(color: string, text: string): string;

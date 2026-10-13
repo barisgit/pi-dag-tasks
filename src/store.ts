@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ArchivedDagTask, DagTask, StoredDagTask, StoreData, TaskStatus } from "./types.js";
+import type { ArchivedDagTask, DagTask, StoredDagTask, StoreData, TaskStatus } from "./types.ts";
 
 const LOCK_RETRY_MS = 40;
 const LOCK_MAX_RETRIES = 125;

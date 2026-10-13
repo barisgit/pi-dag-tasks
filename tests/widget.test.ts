@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { DagTaskStore } from "../src/store.js";
-import { DagTaskWidget } from "../src/ui/widget.js";
+import { DagTaskStore } from "../src/store.ts";
+import { DagTaskWidget } from "../src/ui/widget.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,

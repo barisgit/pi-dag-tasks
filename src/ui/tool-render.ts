@@ -1,6 +1,6 @@
 import { Spacer, Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { ArchivedDagTask, DagTask, TaskResultDetails, TaskQueryResultDetails, TaskOperation, TaskOperationKind } from "../types.js";
+import type { ArchivedDagTask, DagTask, TaskResultDetails, TaskQueryResultDetails, TaskOperation, TaskOperationKind } from "../types.ts";
 
 interface RenderResultLike {
   content?: Array<{ type?: string; text?: string }>;

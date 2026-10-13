@@ -1,4 +1,4 @@
-import type { DagTaskStore } from "./store.js";
+import type { DagTaskStore } from "./store.ts";
 
 export type AutoArchiveMode = "never" | "on_list_complete" | "on_task_complete";
 

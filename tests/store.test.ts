@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DagTaskStore } from "../src/store.js";
+import { DagTaskStore } from "../src/store.ts";
 
 describe("DagTaskStore", () => {
   test("recreates the storage directory if it is deleted after initialization", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { renderTaskResult, renderTaskQueryResult } from "../src/ui/tool-render.js";
-import type { DagTask } from "../src/types.js";
+import { renderTaskResult, renderTaskQueryResult } from "../src/ui/tool-render.ts";
+import type { DagTask } from "../src/types.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,

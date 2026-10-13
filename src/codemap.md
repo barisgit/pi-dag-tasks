@@ -43,10 +43,10 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 - Inner functions: `resolveCwd`, `refreshConfig`, `resolveStorePath` (env/scope → file path), `ensureStore`, `ensureUtilsClient`, `refreshUi`, `publishTaskReminder` (due = `turn >= nextReminderTurn && msSinceTaskTool >= taskReminderForgottenMs()`; `reminderStateKey` dedupe), `suppressTaskReminder`.
 - Events: `session_start` (reset+ensure+refresh), `session_shutdown` (dispose), `context` (reminder unless cooldown), `turn_start` (increment turn, `autoArchive.onTurnStart`, refresh), `tool_call`/`tool_result` (suppress reminder on task tools).
 - `pi.registerTool("task")` (L523): `renderShell:"self"`; `execute` dispatches create/update/archive/archive_all/purge, calls `autoArchive.trackCompletion`/`resetBatchCountdown`, detects newly-unblocked tasks, appends guidance; `renderCall: renderTaskCall`, `renderResult: renderTaskResult`.
-- `pi.registerTool("task_query")` (L645): `scope` ready (in_progress + ready[+limit] + blocked + summary), in_progress (current list, `includeCompleted`), history (archived, `query` filter); `renderCall/Result` from `ui/tool-render.js`.
+- `pi.registerTool("task_query")` (L645): `scope` ready (in_progress + ready[+limit] + blocked + summary), in_progress (current list, `includeCompleted`), history (archived, `query` filter); `renderCall/Result` from `ui/tool-render.ts`.
 - `pi.registerCommand("tasks")` (L696): interactive menus (view/create/detail/history/settings); settings writes `cfg.autoArchiveCompleted` + `saveConfig`; Complete action → `store.update` + `autoArchive.trackCompletion`.
 
-**Dependencies:** `./store.js` (`DagTaskStore`, `TaskPatch`), `./auto-clear.js` (`AutoArchiveManager`), `./config.js`, `./types.js`, `./ui/tool-render.js`, `./ui/widget.js`.
+**Dependencies:** `./store.ts` (`DagTaskStore`, `TaskPatch`), `./auto-clear.ts` (`AutoArchiveManager`), `./config.ts`, `./types.ts`, `./ui/tool-render.ts`, `./ui/widget.ts`.
 
 ### `src/store.ts`
 **Responsibility:** `DagTaskStore` — the data access layer. Persists each session's active and archived tasks in one versioned JSON file, derives IDs and reverse DAG edges, handles legacy migration, and coordinates writes with a stale-PID file lock. Knows nothing about Pi.
@@ -67,7 +67,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 
 **Internals:** Version 1 stores tasks in an ID-keyed object without duplicated `id`, `nextId`, `blocks`, `owner`, or `updatedAt`. Legacy `{nextId,tasks[]}` files load and rewrite on the next mutation. Unknown/malformed files are renamed to `.unsupported-*`. `blockedBy` is canonical and `blocks` is derived. `load`/`save` use atomic rename; `withLock` serializes mutations.
 
-**Dependencies:** `node:fs`, `node:path`, `./types.js`.
+**Dependencies:** `node:fs`, `node:path`, `./types.ts`.
 
 ### `src/types.ts`
 **Responsibility:** Shared type definitions for the whole extension. No runtime code.
@@ -89,7 +89,7 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 - `loadConfig(cwd)` → parsed `DagTasksConfig`, or `{}` on any read/parse error (fail-open).
 - `saveConfig(config, cwd)` → `mkdirSync` (recursive) + `writeFileSync` JSON (2-space indent).
 
-**Dependencies:** `node:fs`, `node:path`, `./types.js` (`DagTasksConfig`).
+**Dependencies:** `node:fs`, `node:path`, `./types.ts` (`DagTasksConfig`).
 
 ### `src/auto-clear.ts`
 **Responsibility:** `AutoArchiveManager` — turn-delayed auto-archive policy. Decides *when* completed tasks get archived based on `cfg.autoArchiveCompleted`, without coupling to Pi events.
@@ -104,4 +104,4 @@ Core implementation of **pi-dag-tasks**, a lean DAG task manager extension for t
 - `onTurnStart(currentTurn)` → `boolean` — archives once `currentTurn - trackedTurn >= delayTurns` (per-task `store.archive([id])` or whole-list `store.archiveCompleted()`); returns whether anything was archived.
 - private `checkAllCompleted(currentTurn)` — sets the all-completed countdown when every current task is `completed`.
 
-**Dependencies:** `./store.js` (imports `DagTaskStore` type only). Driven by `index.ts`, which maps `cfg.autoArchiveCompleted` (`DagTasksConfig`, `types.ts`) onto `AutoArchiveMode` at construction and calls it from `turn_start` and the `task`/`/tasks` completion paths.
+**Dependencies:** `./store.ts` (imports `DagTaskStore` type only). Driven by `index.ts`, which maps `cfg.autoArchiveCompleted` (`DagTasksConfig`, `types.ts`) onto `AutoArchiveMode` at construction and calls it from `turn_start` and the `task`/`/tasks` completion paths.

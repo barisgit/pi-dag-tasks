@@ -11,17 +11,17 @@ import {
   type ReminderIntent,
   type UtilsClient,
 } from "pi-extension-utils/pi";
-import { AutoArchiveManager } from "./auto-clear.js";
-import { loadConfig, saveConfig } from "./config.js";
-import { DagTaskStore, type TaskPatch } from "./store.js";
-import type { DagTask, DagTasksConfig, TaskQueryResultDetails, TaskMutationAction, TaskResultDetails, TaskOperation, TaskStatus } from "./types.js";
+import { AutoArchiveManager } from "./auto-clear.ts";
+import { loadConfig, saveConfig } from "./config.ts";
+import { DagTaskStore, type TaskPatch } from "./store.ts";
+import type { DagTask, DagTasksConfig, TaskQueryResultDetails, TaskMutationAction, TaskResultDetails, TaskOperation, TaskStatus } from "./types.ts";
 import {
   renderTaskCall,
   renderTaskQueryCall,
   renderTaskResult,
   renderTaskQueryResult,
-} from "./ui/tool-render.js";
-import { DagTaskWidget } from "./ui/widget.js";
+} from "./ui/tool-render.ts";
+import { DagTaskWidget } from "./ui/widget.ts";
 
 const TOOL_NAMES = new Set(["task", "task_query"]);
 const TASK_REMINDER_SOURCE = "pi-dag-tasks";
