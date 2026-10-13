@@ -48,9 +48,20 @@ export class DagTaskWidget {
   // incidental TUI re-renders (e.g. the loader spinner) do not tick it per-second.
   private displayNow = Date.now();
 
-  constructor(private store: DagTaskStore, private config: () => DagTasksConfig = () => ({})) {}
+  private tasks: ReturnType<DagTaskStore["list"]> = [];
+  private archived = 0;
 
-  setStore(store: DagTaskStore): void { this.store = store; }
+  constructor(private store: DagTaskStore, private config: () => DagTasksConfig = () => ({})) {
+    this.refreshSnapshot();
+  }
+
+  /** Refresh only at mutation/lifecycle boundaries, never during rendering. */
+  private refreshSnapshot(): void {
+    this.tasks = this.store.list();
+    this.archived = this.store.archivedCount();
+  }
+
+  setStore(store: DagTaskStore): void { this.store = store; this.refreshSnapshot(); }
   setHost(host: WidgetHost): void { this.host = host; }
 
   markActive(_id: string, _active: boolean): void {
@@ -58,9 +69,10 @@ export class DagTaskWidget {
   }
 
   update(): void {
+    this.refreshSnapshot();
     if (!this.host) return;
-    const tasks = this.store.list();
-    const archived = this.store.archivedCount();
+    const tasks = this.tasks;
+    const archived = this.archived;
     const open = tasks.filter((task) => task.status !== "completed").length;
     const inProgress = tasks.filter((task) => task.status === "in_progress").length;
     this.host.setStatus(WIDGET_KEY, tasks.length
@@ -113,8 +125,8 @@ export class DagTaskWidget {
 
   private render(width: number, theme: ThemeLike): string[] {
     const truncate = (line: string) => truncateToWidth(line, width);
-    const tasks = this.store.list();
-    const archived = this.store.archivedCount();
+    const tasks = this.tasks;
+    const archived = this.archived;
     if (tasks.length === 0 && archived === 0) return [];
     const completed = tasks.filter((task) => task.status === "completed");
     const openTasks = tasks.filter((task) => task.status !== "completed");
@@ -148,7 +160,7 @@ export class DagTaskWidget {
   }
 
   private renderTask(task: ReturnType<DagTaskStore["list"]>[number], theme: ThemeLike): string {
-    const blockers = this.store.openBlockers(task);
+    const blockers = task.blockedBy.filter((id) => this.tasks.find((candidate) => candidate.id === id)?.status !== "completed");
     const isSpinning = task.status === "in_progress" && (this.config().animateActiveTasks ?? false);
     const icon = isSpinning ? theme.fg("accent", SPINNER[this.frame % SPINNER.length] ?? "✳")
       : task.status === "completed" ? theme.fg("success", "✔")
@@ -166,7 +178,12 @@ export class DagTaskWidget {
   }
 
   private ensureTimer(): void {
-    if (!this.interval) this.interval = setInterval(() => this.update(), this.config().animateActiveTasks ? 120 : 30_000);
+    if (!this.interval) this.interval = setInterval(() => {
+      // Animation/time repaint has no persistence work; update() owns refresh.
+      this.displayNow = Date.now();
+      this.frame++;
+      this.tui?.requestRender();
+    }, this.config().animateActiveTasks ? 120 : 30_000);
   }
 
   private stopTimer(): void {

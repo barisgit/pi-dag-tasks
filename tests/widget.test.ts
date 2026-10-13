@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { DagTaskStore } from "../src/store.ts";
 import { DagTaskWidget } from "../src/ui/widget.ts";
 
@@ -29,6 +29,33 @@ function attachHost(widget: DagTaskWidget): void {
 }
 
 describe("DagTaskWidget", () => {
+  test("renders and animation ticks use the mutation snapshot without store reads", async () => {
+    const store = new DagTaskStore();
+    store.create({ title: "Active", status: "in_progress" });
+    const widget = new DagTaskWidget(store, () => ({ animateActiveTasks: true }));
+    attachHost(widget);
+    widget.update();
+    const list = spyOn(store, "list");
+    const archived = spyOn(store, "archivedCount");
+    const blockers = spyOn(store, "openBlockers");
+    try {
+      render(widget);
+      render(widget);
+      await Bun.sleep(270);
+      expect(list).not.toHaveBeenCalled();
+      expect(archived).not.toHaveBeenCalled();
+      expect(blockers).not.toHaveBeenCalled();
+      store.update({ id: "1", title: "Changed", status: "completed" });
+      widget.update();
+      expect(render(widget).join("\n")).toContain("Changed");
+    } finally {
+      widget.dispose();
+      list.mockRestore();
+      archived.mockRestore();
+      blockers.mockRestore();
+    }
+  });
+
   test("uses compact progress header without leading status dot", () => {
     const store = new DagTaskStore();
     store.create({ title: "Done", status: "completed" });
